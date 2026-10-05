@@ -20,13 +20,23 @@ module Hackers
       api_config = {}
       api_config[:host] = @config['host'] if @config.key?('host')
       api_config[:port] = @config['port'] if @config.key?('port')
-      api_config[:ssl] = @config.key?('ssl')
       api_config[:path] = @config['url'] if @config.key?('url')
       api_config[:salt] = @config['salt'] if @config.key?('salt')
       api_config[:version] = @config['version'] if @config.key?('version')
       api_config[:language] = @config['language'] if @config.key?('language')
       api_config[:platform] = @config['platform'] if @config.key?('platform')
       api_config[:compression] = @config['compression'] if @config.key?('compression')
+
+      # Absence of the ssl key inherits the default TLS setting; a private
+      # id/password config must never silently fall back to plaintext.
+      api_config[:ssl] = resolve_ssl
+
+      # Plaintext HTTP is refused for the known game host before any
+      # credential leaves the process; explicit plaintext stays possible for
+      # custom/loopback hosts.
+      if api_config[:ssl] == false && config_host == API::HOST
+        raise ArgumentError, 'Plaintext HTTP is not allowed for the game server'
+      end
 
       @api = API.new(**api_config)
       @api.id = @config['id']
@@ -57,6 +67,27 @@ module Hackers
     # Returns true if there is an API session id
     def connected?
       @api.sid?
+    end
+
+    ##
+    # Returns true when a non-empty API session id is present
+    def session_active?
+      @api.sid? && !@api.sid.to_s.empty?
+    end
+
+    ##
+    # Authenticates by id and password without catalog, mission or profile
+    # decoding: exactly one auth request, only the session id is extracted
+    def auth_minimal
+      raw_data = @api.auth
+      data = Serializer.parseData(raw_data)
+
+      sid = data.dig(0, 0, 3)
+      if sid.nil? || sid.to_s.empty?
+        raise Hackers::RequestError.new('Auth', 'empty session id')
+      end
+
+      @api.sid = sid
     end
 
     ##
@@ -187,6 +218,36 @@ module Hackers
     # Checks network connectivity
     def check_connectivity
       @api.check_connectivity
+    end
+
+    private
+
+    ##
+    # Resolves the optional ssl setting: absence inherits the API default
+    # (TLS); explicit booleans are honored; legacy on/off strings are
+    # accepted case-insensitively; any other value fails instead of
+    # silently downgrading to plaintext.
+    def resolve_ssl
+      return API::SSL unless @config.key?('ssl')
+
+      case @config['ssl']
+      when true, false
+        @config['ssl']
+      when String
+        case @config['ssl'].strip.downcase
+        when 'on', 'true' then true
+        when 'off', 'false' then false
+        else raise ArgumentError, 'Invalid ssl setting (expected true, false, on or off)'
+        end
+      else
+        raise ArgumentError, 'Invalid ssl setting (expected true, false, on or off)'
+      end
+    end
+
+    ##
+    # Returns the configured host or the default game host
+    def config_host
+      @config.key?('host') ? @config['host'] : API::HOST
     end
   end
 end

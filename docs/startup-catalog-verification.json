@@ -1,0 +1,94 @@
+{
+  "schema": "ta-hackers/catalog-check/v1",
+  "mode": "--live",
+  "runtime": "ruby 3.3.12 (2026-07-16 revision 0581089df9) [x86_64-linux]",
+  "ruby_version": "3.3.12",
+  "timestamp_utc": "2026-10-05T06:39:36Z",
+  "total_requests": 4,
+  "rows": [
+    {
+      "method": "language_translations",
+      "skipped": false,
+      "ok": true,
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "content_encoding": "gzip",
+      "raw_bytes": 23039,
+      "decoded_bytes": 57955,
+      "sections": 1,
+      "raw_records": 703,
+      "fields": 1280,
+      "model_records": 703,
+      "sanity_ok": true,
+      "checked": [
+        "records>=1",
+        "non-empty string keys",
+        "at least one non-empty string value"
+      ]
+    },
+    {
+      "method": "app_settings",
+      "skipped": false,
+      "ok": true,
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "content_encoding": "gzip",
+      "raw_bytes": 347,
+      "decoded_bytes": 484,
+      "sections": 1,
+      "raw_records": 19,
+      "fields": 62,
+      "model_records": 17,
+      "sanity_ok": true,
+      "checked": [
+        "keys>=12",
+        "datetime present",
+        "languages>=1"
+      ],
+      "language_count": 16
+    },
+    {
+      "method": "node_types",
+      "skipped": false,
+      "ok": true,
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "content_encoding": "gzip",
+      "raw_bytes": 7542,
+      "decoded_bytes": 23411,
+      "sections": 3,
+      "raw_records": 570,
+      "fields": 7208,
+      "model_records": 18,
+      "sanity_ok": true,
+      "checked": [
+        "nodes==18",
+        "names non-empty",
+        "levels>=1 per node"
+      ],
+      "level_records": 324
+    },
+    {
+      "method": "program_types",
+      "skipped": false,
+      "ok": true,
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "content_encoding": "gzip",
+      "raw_bytes": 8363,
+      "decoded_bytes": 26265,
+      "sections": 2,
+      "raw_records": 484,
+      "fields": 8459,
+      "model_records": 22,
+      "sanity_ok": true,
+      "checked": [
+        "programs==22",
+        "names non-empty",
+        "levels>=1 per program"
+      ],
+      "level_records": 462
+    }
+  ],
+  "ok": true
+}

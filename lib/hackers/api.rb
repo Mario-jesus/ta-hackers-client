@@ -9,7 +9,7 @@ module Hackers
     SSL = true
     PATH = '/req.php'
     SALT = 'ZqQxXFFy'
-    VERSION = 1227
+    VERSION = 1229
     LANGUAGE = 'en'
     PLATFORM = 'google'
 
@@ -190,7 +190,10 @@ module Hackers
     def auth(id = @id, password = @password)
       @client.request_cmd(
         {
-          'auth_id_password' => '',
+          # Native clients send auth_id_password as a valueless flag (no '='),
+          # so the value is nil: URI.encode_www_form emits the bare key. All
+          # credential values keep the standard form encoding.
+          'auth_id_password' => nil,
           'id_player' => id,
           'password' => password,
           'app_version' => @version
@@ -479,7 +482,7 @@ module Hackers
     def read_chat(room, last = '')
       @client.request_session(
         {
-          'chat_display' => '',
+          'chat_display' => nil,
           'room' => room,
           'last_message' => last,
           'app_version' => @version
@@ -493,7 +496,7 @@ module Hackers
     def write_chat(room, message, last = '', id = @id)
       @client.request_session(
         {
-          'chat_send' => '',
+          'chat_send' => nil,
           'room' => room,
           'last_message' => last,
           'message' => message,
