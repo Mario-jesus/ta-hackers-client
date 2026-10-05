@@ -111,6 +111,15 @@ SHELL.add_command(
   :connect,
   description: 'Connect to the server'
 ) do |tokens, shell|
+  minimal = Object.const_defined?(:MINIMAL_CONNECT) && MINIMAL_CONNECT
+
+  if minimal
+    msg = 'Authenticate'
+    GAME.auth_minimal
+    LOGGER.log(msg)
+    next
+  end
+
   msg = 'Language translations'
   GAME.language_translations.load
   LOGGER.log(msg)
@@ -604,19 +613,82 @@ rescue Hackers::RequestError => e
   LOGGER.error("#{msg} (#{e})")
 end
 
+# name
+SHELL.add_command(
+  :name,
+  description: 'Show own player name',
+  params: ['[--expect]', '[name]']
+) do |tokens, shell|
+  expect = nil
+  if tokens[1] == '--expect'
+    if tokens[2].nil?
+      LOGGER.error('No expected name')
+      next
+    end
+
+    expect = tokens[2..].join(' ')
+  elsif tokens.length > 1
+    LOGGER.error('Unexpected argument')
+    next
+  end
+
+  unless GAME.session_active?
+    LOGGER.error(NOT_CONNECTED)
+    next
+  end
+
+  msg = 'Player get info'
+  profile = GAME.player_info(GAME.api.id)
+  LOGGER.log(msg)
+
+  # The own account id is stored for private sender matching only and is
+  # never printed or exported.
+  CLI_RESULTS[:own_id] = profile.id
+  CLI_RESULTS[:own_name] = profile.name
+
+  if expect.nil?
+    shell.puts(profile.name)
+    next
+  end
+
+  matches = profile.name == expect
+  CLI_RESULTS[:own_name_matches] = matches
+  if matches
+    LOGGER.log('Own name matches')
+  else
+    LOGGER.error("Own name mismatch (expected #{expect}, got #{profile.name})")
+  end
+rescue Hackers::RequestError => e
+  LOGGER.error("#{msg} (#{e})")
+end
+
 # rename
 SHELL.add_command(
   :rename,
   description: 'Set new name',
   params: ['<name>']
 ) do |tokens, shell|
-  unless GAME.connected?
-    shell.puts(NOT_CONNECTED)
+  unless GAME.session_active?
+    LOGGER.error(NOT_CONNECTED)
+    next
+  end
+
+  name = tokens[1..].join(' ')
+  if name.empty?
+    LOGGER.error('No name given')
+    next
+  end
+
+  # One-time rename route: skip only when a prior own-name read already
+  # verified the exact same value. Never retries or falls back to another
+  # mutation route.
+  if CLI_RESULTS[:own_name] == name
+    LOGGER.log('Name is already exact, rename skipped')
     next
   end
 
   msg = 'Player set name'
-  GAME.player.rename(tokens[1])
+  GAME.player.rename(name)
   LOGGER.log(msg)
 rescue Hackers::RequestError => e
   LOGGER.error("#{msg} (#{e})")

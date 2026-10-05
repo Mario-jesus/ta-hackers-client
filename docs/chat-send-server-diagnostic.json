@@ -1,0 +1,149 @@
+{
+  "diagnostic": "chat-send-server-diagnostic",
+  "status": "live_send_validation_blocked_by_transport_timeouts",
+  "public_safety": {
+    "private_paths_omitted": true,
+    "account_ids_omitted": true,
+    "session_ids_omitted": true,
+    "credentials_omitted": true,
+    "raw_response_bodies_omitted": true,
+    "raw_urls_omitted": true,
+    "actual_chat_texts_omitted_except_approved_test_texts": true,
+    "fabricated_timestamps": false
+  },
+  "turn_totals": {
+    "attempted_rpc_count": 20,
+    "http_200_count": 17,
+    "timed_out_read_count": 3,
+    "diagnostic_send_attempt_count": 2,
+    "test_codificacion_attempted": false,
+    "rename_attempted": false,
+    "new_account_attempted": false,
+    "purchase_attempted": false,
+    "automatic_request_retries": false,
+    "scope_note": "Counts are for this diagnostic turn, not older Test attempts."
+  },
+  "waves": [
+    {
+      "wave": 1,
+      "mode": "controlled_send_path",
+      "rpc_count": 2,
+      "http_statuses": [200],
+      "result": "no_send",
+      "evidence": [
+        "Authentication succeeded.",
+        "Profile read timed out before chat requests.",
+        "No diagnostic message was sent."
+      ]
+    },
+    {
+      "wave": 2,
+      "mode": "controlled_send_path",
+      "rpc_count": 5,
+      "http_statuses": [200, 200, 200, 200, 200],
+      "approved_test_text": "Test diagnostico",
+      "result": "send_attempted_unconfirmed",
+      "evidence": [
+        "Send response decoded byte count was 0.",
+        "Response used gzip Content-Encoding and chunked transfer with absent Content-Length; the decoded body was empty.",
+        "Own-message match was false and publication was unconfirmed.",
+        "CLI chat count summary was 0, but actual read counts are unknown for wave 2; the summary value is not proof of zero messages."
+      ]
+    },
+    {
+      "wave": 3,
+      "mode": "read_only_independent_private_parser",
+      "rpc_count": 3,
+      "http_statuses": [200, 200, 200],
+      "result": "read_only_window_no_approved_test_echo",
+      "evidence": [
+        "Auth capture was 144 bytes across 5 safe sections.",
+        "Profile capture was 73 bytes across 15 safe fields.",
+        "Chat capture was 3945 bytes.",
+        "Safe independent private parser found 33 messages and no owned Test or Test diagnostico within the returned window.",
+        "No id, name, session or raw message text is published.",
+        "Earlier helper chatcount 0 and shape count 1 were erroneous and corrected with safe parsed counts and provenance."
+      ]
+    },
+    {
+      "wave": 4,
+      "mode": "controlled_send_path_after_nil_native_flags_fix",
+      "rpc_count": 5,
+      "http_statuses": [200, 200, 200, 200, 200],
+      "approved_test_text": "Test protocolo",
+      "result": "send_attempted_unconfirmed",
+      "evidence": [
+        "Send response decoded byte count was 0.",
+        "Own publication was not confirmed.",
+        "Pre-read/persistent cursor handling did not provably fix publication.",
+        "Summary count 0 is not actual parse-zero proof."
+      ]
+    },
+    {
+      "wave": 5,
+      "mode": "chat_uri_space_and_raw_colon_fix_attempt",
+      "rpc_count": 3,
+      "http_statuses": [200, 200],
+      "approved_test_text_not_sent": "Test codificacion",
+      "result": "no_send",
+      "evidence": [
+        "Maximum budget was 5 RPCs but the run stopped at 3.",
+        "Auth and profile returned HTTP 200.",
+        "Initial chat_display read timed out.",
+        "Test codificacion was not sent."
+      ]
+    },
+    {
+      "wave": 6,
+      "mode": "chat_uri_space_and_raw_colon_fix_retry",
+      "rpc_count": 2,
+      "http_statuses": [200],
+      "approved_test_text_not_sent": "Test codificacion",
+      "result": "no_send",
+      "evidence": [
+        "Authentication returned HTTP 200.",
+        "Profile read timed out.",
+        "Test codificacion was not sent.",
+        "Further waves were stopped to preserve the exclusive ledgers and avoid blind resends."
+      ]
+    }
+  ],
+  "native_actual_method_map": {
+    "version": "1.229",
+    "metadata_sha256_prefix": "a821263f",
+    "chat_literal_prefixes": [2682, 2683],
+    "methods": {
+      "chat_display": "NetRequest_chatDisplay 0x19c8e0c",
+      "chat_send": "NetRequest_chatSend 0x19c8fb4"
+    },
+    "observed_alignment": [
+      "Parameter order matches Ruby/player-id sender for the inspected chat methods.",
+      "Raw concatenation is canonicalized by .NET Uri before checksum.",
+      ".NET 8.0.20 synthetic probe validated native space as %20 and colon as raw, unlike Ruby form encoding plus and colon %3A, for the explicit toolchain only."
+    ],
+    "not_claimed": [
+      "No full native character-equivalence claim.",
+      "No credentials or raw concatenated URLs are published."
+    ]
+  },
+  "code_verification_summary": {
+    "api_flags": "RED 2 failures, then 34 examples passing",
+    "client_uri": "RED 2 failures, then 66 examples passing",
+    "helper": "RED, then 24 examples passing",
+    "independent_latest": [
+      "full suite 828 examples, 0 failures",
+      "focused API and client 66 examples, 0 failures",
+      "helper 24 examples passing",
+      "direct attempt 6 mock success through real entry point with fake transport",
+      "read-only attempt 6 refused",
+      "syntax and diff clean"
+    ]
+  },
+  "conclusion": {
+    "verified_result": "Offline code paths are verified, but live send validation remains blocked by transport timeouts.",
+    "publication_status": "not_proven_fixed",
+    "root_cause_status": "not_proven",
+    "native_review_status": "pending_no_approval",
+    "next_diagnostic_condition": "Only after healthy transport; inspect native caller/server eligibility timestamps and missing premises before any further live send."
+  }
+}

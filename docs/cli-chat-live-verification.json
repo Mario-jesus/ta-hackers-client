@@ -1,0 +1,57 @@
+{
+  "schema": "ta-hackers/cli-priority-live/v1",
+  "classification": "partial-name-mismatch-before-send",
+  "run_utc": "2026-10-05T16:52:24Z",
+  "run": {
+    "process_exit": 1,
+    "ok": false,
+    "expected_name_match": false,
+    "own_name": "[ff0000]βℓąȼЌhąţhąȼЌ",
+    "own_name_in_guard_output": null,
+    "own_name_chars": 20,
+    "own_name_bytes": 31,
+    "own_name_color_prefix": true,
+    "requested_name": "[ff0000]βℓąȼЌhąţhąȼЌ€я",
+    "requested_name_chars": 22,
+    "nfc_normalized_match": false,
+    "last_cli_error": "Own name mismatch expected 22 vs got prefix 20",
+    "rename_attempted": true,
+    "send_attempted": false,
+    "own_message_seen": false,
+    "chat_message_count": 0,
+    "error_class": null,
+    "rpc_counts": {
+      "auth_id_password": 1,
+      "player_get_info": 2,
+      "player_set_name_once": 1
+    },
+    "http_status_counts": {
+      "200": 4
+    }
+  },
+  "scope": {
+    "authorized": "one fresh login, at most two own-name/profile reads, one rename if needed, one send of 'Test', one public chat read (at most six RPCs)",
+    "executed": "login + two profile reads + one rename; sequence stopped as designed on --expect mismatch before any chat send/read",
+    "not_executed": "no 'Test' send, no chat read, no new account, no other profiles, no other rooms, no other messages, no fallback rename route, no retry, no ledger reset",
+    "stopped_before": "chat send/read, on expected-name equality failure"
+  },
+  "interpretation_limits": [
+    "The returned own name is an observed API readback: the server stored/returned a 20-character, 31-byte exact prefix of the requested 22-character name, with the color prefix intact.",
+    "The outgoing rename query carried the exact original 22-character name, verified by the HTTP guard before the wire call.",
+    "This is NOT proof of a general 20-character or 32-byte database limit, and NOT evidence about the underlying implementation.",
+    "The full desired name was NOT confirmed applied; the CLI 'Test' send was NOT live-verified.",
+    "NFC-normalized comparison of requested vs returned does not match, so normalization does not explain the difference.",
+    "No hard input cap is imposed or claimed."
+  ],
+  "privacy": {
+    "excluded": "account IDs, passwords, session IDs, response bodies, raw command output, private log contents",
+    "cli_json_masking": "the parent guard output masked a non-matching own_name as null; the private CLI summary contained the returned prefix, which the parent inspected locally without exposing account IDs or credentials",
+    "private_ledger": "~/.local/share/ta-hackers-toolchain/accounts/backend-functional-test/cli-priority-attempt.json (0600, outside the repository, prevents duplicate rename/send after interrupted runs)",
+    "protected_logs": "process stdout/stderr captured to 0600 protected logs outside the repository"
+  },
+  "process_notes": [
+    "Two preparation wrapper tasks returned empty output and no files; the parent instead instrumented and loaded the real bin/sandbox in the same process with a read-only HTTP scope guard, peer/TLS verification and unchanged source hash, with private capture. No API-only substitute was used.",
+    "Independent C2 late disclosure: two pool TLS probes may have attempted external authentication with synthetic credentials outside the intended no-network scope; not counted as CLI proof, no real credentials, no repeats; exact actual counts unknown (verifier 'may' wording). Recorded honestly, no blame.",
+    "Offline source state after C1/C2 corrections: 806 examples, 0 failures; independent targeted proof 87/0 after critical fixes."
+  ]
+}

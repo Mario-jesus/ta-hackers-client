@@ -5,6 +5,11 @@
 require 'optparse'
 require 'json'
 
+# The entrypoint must not depend on the caller's CWD or RUBYLIB: make the
+# repository lib/ directory resolvable for the requires below.
+LIB_DIR = File.expand_path(File.join(__dir__, '..', 'lib'))
+$LOAD_PATH.unshift(LIB_DIR) unless $LOAD_PATH.include?(LIB_DIR)
+
 require 'hackers'
 require 'sandbox'
 require 'cli/sandbox'
@@ -32,6 +37,18 @@ option_parser = OptionParser.new do |opts|
 
   opts.on('-c config', '', 'Run with the config') do |v|
     options[:config] = v
+  end
+
+  opts.on('-m', '--minimal', 'Connect minimally without catalog prelude') do |v|
+    options[:minimal] = v
+  end
+
+  opts.on('-e command', '--execute command', 'Execute the command and exit (repeatable)') do |v|
+    (options[:execute] ||= []) << v
+  end
+
+  opts.on('-j', '--json', 'Emit a structured JSON batch summary') do |v|
+    options[:json] = v
   end
 
   opts.on('-a', '', 'Disable execution of the auto commands') do |v|
@@ -98,21 +115,25 @@ if options.key?(:delete)
   exit
 end
 
-config_file = File.join(CONFIGS_DIR, "#{options[:config]}#{CONFIG_EXT}")
-unless File.file?(config_file)
+config_file = Sandbox::Config.resolve_path(options[:config], CONFIGS_DIR)
+if config_file.nil?
   puts("Config #{options[:config]} doesn't exist")
-  exit
+  exit(1)
 end
 
 config = Sandbox::Config.new(config_file)
 begin
   config.load
-rescue JSON::ParserError => e
+rescue JSON::ParserError => _e
+  # The parser message quotes config content: print a static reason only,
+  # never echo fragments of a private config.
   puts("Format of the config #{options[:config]} is invalid")
-  puts
-  puts(e)
-  exit
+  exit(1)
 end
+
+# Minimal mode skips the twelve-catalog prelude in the connect command and
+# authenticates session-id only.
+MINIMAL_CONNECT = options.key?(:minimal)
 
 GAME = Hackers::Game.new(config)
 GAME.countries_list.raw_data = File.read(File.join(DATA_DIR, COUNTRIES_FILE))
@@ -135,6 +156,16 @@ LOGGER.info_prefix_cterm = ColorTerm.white.bold
 LOGGER.info_cterm = ColorTerm.white
 
 require 'cli'
+
+# Batch mode: execute the requested commands and exit before the blocking
+# interactive loop. Auto commands are not executed in batch mode; the batch
+# sequence is expected to be explicit and complete.
+if options.key?(:execute)
+  require 'cli/batch'
+
+  batch = Sandbox::Batch.new(SHELL, LOGGER, json: options.key?(:json))
+  exit(batch.run(options[:execute]) ? 0 : 1)
+end
 
 begin
   if config.key?('autocmd') && !options.key?(:auto)

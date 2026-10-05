@@ -37,6 +37,7 @@ module Hackers
 
       room = @rooms.detect { |r| r.id == room }
       raw_data = @api.read_chat(room.id, room.last_message)
+      validate_response!(raw_data)
       serializer = Serializer::Chat.new(raw_data)
       data = serializer.parse(0)
       parse(data, room)
@@ -53,12 +54,50 @@ module Hackers
         room.last_message
       )
 
+      validate_response!(raw_data)
       serializer_chat = Serializer::Chat.new(raw_data)
       data = serializer_chat.parse(0)
       parse(data, room)
     end
 
     private
+
+    def validate_response!(raw_data)
+      raw = raw_data.to_s
+      return if raw.empty?
+
+      validate_exception_response!(raw)
+      validate_chat_records!(raw)
+    end
+
+    def validate_exception_response!(raw)
+      return unless raw == EXCEPTION_TYPE || raw.start_with?("#{EXCEPTION_TYPE},", "#{EXCEPTION_TYPE};")
+
+      if raw.start_with?("#{EXCEPTION_TYPE},")
+        envelope = Serializer::Exception.new(raw).parse(0, 0)
+        if EXCEPTIONS.key?(envelope.data)
+          raise EXCEPTIONS[envelope.data].new(envelope.type, envelope.data)
+        end
+      end
+
+      raise RequestError.new(EXCEPTION_TYPE)
+    rescue Serializer::ParserError, EncodingError, ArgumentError
+      raise RequestError.new(EXCEPTION_TYPE)
+    end
+
+    def validate_chat_records!(raw)
+      section = raw.split(Serializer::Base::DELIM_SECTION_NORM, 2).first
+      section.split(Serializer::Base::DELIM_RECORD_NORM).each do |record|
+        fields = record.split(Serializer::Base::DELIM_FIELD_NORM, -1)
+        raise RequestError.new('Chat response malformed') unless fields.length == 7
+        raise RequestError.new('Chat response malformed') unless numeric_chat_field?(fields[3])
+        raise RequestError.new('Chat response malformed') unless numeric_chat_field?(fields[6])
+      end
+    end
+
+    def numeric_chat_field?(value)
+      value.match?(/\A\d+\z/)
+    end
 
     def parse(data, room)
       messages = []

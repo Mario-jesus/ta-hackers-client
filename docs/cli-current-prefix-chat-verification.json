@@ -1,0 +1,65 @@
+{
+  "classification": "send-attempted-unconfirmed",
+  "summary": "The user accepted the current returned prefix and authorized exactly one Test send to World 999 with no rename. The real CLI attempted the send and exited 0, but the follow-up read did not confirm the owned message.",
+  "safe_parent_result": {
+    "classification": "send-attempted-unconfirmed",
+    "send_attempted": true,
+    "own_message_seen": false,
+    "chat_message_count": 29,
+    "rpc_count": 4,
+    "statuses": [200, 200, 200, 200],
+    "exit": 0,
+    "stop": "send-attempted-unconfirmed"
+  },
+  "process_exits": {
+    "real_cli_exit": 0,
+    "guard_process_exit": 1,
+    "note": "The guard wrapper process exited 1 even though the real CLI process exit reported by the parent result was 0."
+  },
+  "authorized_scope": {
+    "accepted_current_name": "[ff0000]βℓąȼЌhąţhąȼЌ",
+    "room": 999,
+    "message_text": "Test",
+    "rename_attempted": false,
+    "new_account_created": false,
+    "automatic_retry_attempted": false,
+    "duplicate_authorization_handling": "Duplicate authorization messages authorized only this one send."
+  },
+  "rpc_sequence": [
+    "auth",
+    "profile_or_own_name_check_for_current_prefix",
+    "chat_send_world_999_test",
+    "chat_read_world_999"
+  ],
+  "network_observation": {
+    "rpc_count": 4,
+    "http_statuses": [200, 200, 200, 200],
+    "transport": "direct parent-observed live CLI run with guarded HTTP scope; no raw bodies or credentials are recorded here"
+  },
+  "ledger": {
+    "current_prefix_ledger_name": "cli-current-prefix-test-world999.json",
+    "old_rename_ledger_preserved": true,
+    "ledger_path_recorded": false
+  },
+  "match_contract": {
+    "own_message_seen": false,
+    "chat_message_count": 29,
+    "own_match_checks": "The implementation checks parsed sender id and exact message text internally, not display name alone.",
+    "no_proven_cause": "No proven reason is established here for the missing own-message match or delivery confirmation."
+  },
+  "provenance": {
+    "source": "direct parent live result supplied to documentation-only worker",
+    "guard_script": "scripts/cli_current_prefix_check.rb executed by parent only",
+    "helper_scope_review": "pending",
+    "native_review": "unstarted; no approval and no source review performed",
+    "full_suite_for_this_doc_update": "not rerun because this update changed docs/evidence only; historical source suite evidence remains 806 examples green"
+  },
+  "privacy": {
+    "contains_credentials": false,
+    "contains_session_id": false,
+    "contains_account_id": false,
+    "contains_raw_response_bodies": false,
+    "contains_private_file_paths": false,
+    "fabricated_timestamps": false
+  }
+}
