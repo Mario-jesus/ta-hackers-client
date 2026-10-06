@@ -4,13 +4,15 @@ The scoped helper runs the real `bin/sandbox` with minimal authentication and
 no polling. Default/help/import paths are offline. **`--live` without
 `--send-count` remains T1's read-only, three-RPC check.** Explicit
 `--send-count 1..5` selects only that prefix of the five authorized messages.
-No live outcome has been observed; only the parent may execute the separately
-authorized T3 attempt after the source unit, tests and applicable lifecycle checks.
+The parent executed one bounded T3 attempt: publication remains unknown and
+the goal is partial. No further server call is authorized; see the observed
+live outcome below.
 
 This immediate batch does **not** repair the interactive terminal. T1 and T0a
 are closed; T0b is paused with its six-case/two-failure candidate preserved in
-stash `94f3dcf1356e5c767e7a7c2357cd8d8413e7a3d2`. T2 remains unchecked until
-parent-owned closure. See `odd/tasks/cli-authenticated-chat-tests.md`.
+stash `94f3dcf1356e5c767e7a7c2357cd8d8413e7a3d2`. T2 closed at `be7e033`
+with independent verification and final native acknowledgement; T3 remains
+unchecked. See `odd/tasks/cli-authenticated-chat-tests.md`.
 
 ## Review path
 
@@ -140,4 +142,35 @@ account/publication verification.
 Historical T1 evidence remains separate: initial RED 2/2, correction SID RED
 2/2, corrected GREEN 40/0, relevant 149/0, full 928/0, helpers 24+10 and syntax
 passing. T0a subsequently established the reviewed 936-example baseline.
-Parent owns commit, assessment, native lifecycle and the one future T3 handoff.
+Parent owns commit, assessment and native lifecycle. These offline results
+belong to the unchanged source unit, not new tests of this passive report.
+
+## Observed bounded live attempt
+
+**Partial: required fresh owned READ echo unconfirmed; publication unknown.**
+After T2 closed at `be7e033ba1b46be334c2863a1504add79a8460af`, the parent
+launched the real CLI helper once with `--live --send-count 5`. The sanitized
+allowlisted summary, not private captures, supplies this evidence:
+
+| Evidence | Observed result |
+| --- | --- |
+| Classification / error class | `echo-unconfirmed` / null |
+| RPC count / HTTP statuses | 5 / `[200, 200, 200, 200, 200]` |
+| Existing-account name/profile check | `name_verified=true` |
+| Durable reserved / possibly dispatched / owned confirmed | 1 / 1 / 0 |
+| CLI exit / process exit | 1 / 1 |
+| Single launch / retry permitted / shared config unchanged | true / false / true |
+
+Sequence: auth → profile → baseline → SEND `Test codificacion 1` → required
+READ 1. The durable pre-wire reservation is spent. No sends 2–5, next RPC,
+extra READ, retry or new attempt followed the unconfirmed echo. HTTP 200 and
+possible dispatch prove neither publication nor loss; incoming content and
+interactive listening are not established. The last CLI `message_count=0`
+reflects baseline bookkeeping, not evidence that READ 1 was empty.
+
+The synthetic country/room aggregate limitation and SEND-consumed-echo case
+above do not establish this attempt's cause. Private captures/ledger bytes
+remain private, preserved and never reusable/resettable. Unused ceiling
+capacity is not permission for remaining queries. Any additional server call
+requires fresh explicit bounded human authorization and a separate diagnostic
+scope; T3 stays unchecked until its underlying goal is proven.
