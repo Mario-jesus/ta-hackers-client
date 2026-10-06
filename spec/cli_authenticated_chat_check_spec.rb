@@ -11,7 +11,8 @@ RSpec.describe CliAuthenticatedChatCheck do
   # Every runtime fixture is disposable and synthetic. Only Net::HTTP is
   # replaced: the real entrypoint, signing, serializers and dispatch execute.
   def run_fake(name: described_class::EXPECTED_NAME, auth: '0,0,0,SYNTHETIC_SESSION,4,500',
-               chat: '1000,Alice,hello,55,60,3,999', timeout_at: nil, config: {}, extra: [], profile_id: 777, profile_body: nil, status_at: nil)
+               chat: '1000,Alice,hello,55,60,3,999', timeout_at: nil, config: {}, extra: [], profile_id: 777, profile_body: nil, status_at: nil,
+               batch_bodies: nil, disk_failure: nil)
     Dir.mktmpdir('authenticated-chat-spec') do |dir|
       account = File.join(dir, 'synthetic.json')
       attempt = File.join(dir, 'attempt')
@@ -24,6 +25,25 @@ RSpec.describe CliAuthenticatedChatCheck do
         calls = []
         starts = []
         reads = []
+        trace = []
+        syncs = []
+        original_write = File.instance_method(:write)
+        File.define_method(:write) do |data|
+          if #{disk_failure.inspect} == 'short-write' && File.basename(path) == 'send-1.json'
+            original_write.bind_call(self, data[0, 1])
+          else
+            original_write.bind_call(self, data)
+          end
+        end
+        original_fsync = File.instance_method(:fsync)
+        File.define_method(:fsync) do
+          if path == #{dir.inspect} || path.start_with?(#{attempt.inspect})
+            syncs << (path == #{dir.inspect} ? 'parent' : File.basename(path))
+            raise IOError, 'PRIVATE_DISK_ERROR' if File.basename(path) == #{disk_failure.inspect} ||
+              (#{disk_failure.inspect} == 'send-directory' && path == #{attempt.inspect} && syncs[-2] == 'send-1.json')
+          end
+          original_fsync.bind_call(self)
+        end
         original_read = File.method(:read)
         File.define_singleton_method(:read) do |path, *args, **kwargs|
           reads << caller_locations.first.path if path == #{account.inspect}
@@ -34,18 +54,30 @@ RSpec.describe CliAuthenticatedChatCheck do
             reservation = File.join(#{attempt.inspect}, 'reservation.json')
             raise 'missing reservation before transport' unless File.file?(reservation)
             raise 'non-private reservation' unless (File.stat(reservation).mode & 0o777) == 0o600
+            raise 'attempt directory not durable' if #{!extra.empty?} && !syncs.include?('parent')
             starts << calls.length + 1
             block ? block.call(self) : self
           end
           define_method(:request) do |request, *_args, &block|
             pairs = URI.decode_www_form(URI(request.path).query)
-            rpc = pairs.map(&:first).find { |key| %w[auth_id_password player_get_info chat_display].include?(key) }
+            rpc = pairs.map(&:first).find { |key| %w[auth_id_password player_get_info chat_display chat_send].include?(key) }
             calls << rpc
+            params = pairs.to_h
+            if rpc == 'chat_send'
+              index = calls.count('chat_send')
+              reservation = File.join(#{attempt.inspect}, "send-\#{index}.json")
+              raise 'missing durable send reservation' unless File.file?(reservation) &&
+                (File.stat(reservation).mode & 0o777) == 0o600 && syncs.last(2) == ["send-\#{index}.json", 'attempt']
+            end
+            trace << { rpc: rpc, room_ok: params['room'].nil? || params['room'] == '999',
+                       owner_ok: params['id_player'].nil? || params['id_player'] == '777',
+                       session_ok: params['session_id'].nil? || params['session_id'] == 'SYNTHETIC_SESSION',
+                       text: params['message'], cursor: params['last_message'] }
             raise Net::ReadTimeout, 'PRIVATE_EXCEPTION' if calls.length == #{timeout_at.inspect}
             body = case rpc
             when 'auth_id_password' then #{auth.inspect}
             when 'player_get_info' then #{(profile_body || "#{profile_id},#{name},100,50,10,500,0,0,0,3,0,0,0,0,0").inspect}
-            when 'chat_display' then #{chat.inspect}
+            when 'chat_display', 'chat_send' then #{batch_bodies.inspect} ? #{batch_bodies.inspect}[calls.length - 3] : #{chat.inspect}
             else raise 'unexpected synthetic request'
             end
             response = calls.length == #{status_at.inspect} ? Net::HTTPForbidden.new('1.1', '403', 'Forbidden') : Net::HTTPOK.new('1.1', '200', 'OK')
@@ -58,15 +90,17 @@ RSpec.describe CliAuthenticatedChatCheck do
         summary = CliAuthenticatedChatCheck.run(['--live', '--config', #{account.inspect}, '--attempt-dir', #{attempt.inspect}, *#{extra.inspect}])
         retained = defined?(GAME) && GAME.chat.opened?(999)
         cursor = retained && GAME.chat.find { |room| room.id == 999 }.last_message
-        puts JSON.generate(summary: summary, calls: calls, starts: starts, config_readers: reads, retained: retained, cursor: cursor,
+        puts JSON.generate(summary: summary, calls: calls, starts: starts, config_readers: reads, retained: retained, cursor: cursor, trace: trace, syncs: syncs,
                            polling: defined?(CHAT_ROOMS) ? CHAT_ROOMS.length : 0)
       RUBY
       out, err, status = Open3.capture3(RbConfig.ruby, runner)
-      expect(err).not_to include('PRIVATE_EXCEPTION', 'synthetic-password', 'SYNTHETIC_SESSION')
+      expect(err).not_to include('PRIVATE_EXCEPTION', 'PRIVATE_DISK_ERROR', 'synthetic-password', 'SYNTHETIC_SESSION')
       expect(status.exitstatus).to eq(0)
       expect(out.lines.length).to eq(1)
       yield JSON.parse(out.lines.last), dir if block_given?
-      JSON.parse(out.lines.last)
+      result = JSON.parse(out.lines.last)
+      expect(JSON.generate(result['summary'])).not_to include('PRIVATE_EXCEPTION', 'PRIVATE_DISK_ERROR', 'synthetic-password', 'SYNTHETIC_SESSION', '777')
+      result
     end
   end
 
@@ -197,6 +231,38 @@ RSpec.describe CliAuthenticatedChatCheck do
       end
     end
 
+    it 'reserves each SEND exclusively, preserving a spent reservation on reuse' do
+      Dir.mktmpdir('attempt-spec') do |dir|
+        attempt = described_class::Attempt.new(File.join(dir, 'attempt'))
+        attempt.sync_parent!
+        attempt.reserve_send(1)
+        reservation = File.join(dir, 'attempt', 'send-1.json')
+        before = File.binread(reservation)
+        expect(File.stat(reservation).mode & 0o777).to eq(0o600)
+        expect { attempt.reserve_send(1) }.to raise_error(described_class::Stop, 'reservation-failed')
+        expect(File.binread(reservation)).to eq(before)
+        attempt.close
+      end
+    end
+
+    [:open, :write, :fsync].each do |operation|
+      it "refuses #{operation} failure without allowing reservation reuse" do
+        Dir.mktmpdir('attempt-spec') do |dir|
+          attempt = described_class::Attempt.new(File.join(dir, 'attempt'))
+          path = File.join(dir, 'attempt', 'send-1.json')
+          if operation == :open
+            allow(File).to receive(:open).and_call_original
+            allow(File).to receive(:open).with(path, File::WRONLY | File::CREAT | File::EXCL, 0o600).and_raise(IOError)
+          else
+            allow_any_instance_of(File).to receive(operation).and_raise(IOError)
+          end
+          expect { attempt.reserve_send(1) }.to raise_error(described_class::Stop, 'reservation-failed')
+          expect(File.exist?(path)).to eq(operation != :open)
+          attempt.close
+        end
+      end
+    end
+
     it 'refuses symlink destinations and ancestors' do
       Dir.mktmpdir('attempt-spec') do |dir|
         target = File.join(dir, 'target')
@@ -271,6 +337,19 @@ RSpec.describe CliAuthenticatedChatCheck do
       expect(guard.rpc_count).to eq(3)
     end
 
+    it 'refuses a GET payload before dispatch' do
+      raw = request(auth_params)
+      raw.body = 'unexpected body'
+      expect { guard.before_request(http, raw) }.to raise_error(described_class::Stop, 'destination-refused')
+      expect(guard.rpc_count).to eq(0)
+    end
+
+    it 'refuses non-GET methods before dispatch' do
+      raw = Net::HTTP::Post.new(request(auth_params).path)
+      expect { guard.before_request(http, raw) }.to raise_error(described_class::Stop, 'destination-refused')
+      expect(guard.rpc_count).to eq(0)
+    end
+
     it 'refuses duplicate parameters, extra parameters and absolute destinations' do
       raw = request(auth_params)
       duplicate = Net::HTTP::Get.new(raw.path + '&id_player=778')
@@ -279,6 +358,159 @@ RSpec.describe CliAuthenticatedChatCheck do
       absolute = Net::HTTP::Get.new('https://other.example' + raw.path)
       expect { guard.before_request(http, absolute) }.to raise_error(described_class::Stop, 'destination-refused')
       expect(guard.rpc_count).to eq(0)
+    end
+  end
+
+  describe 'bounded protected CLI batch' do
+    def successful_bodies(count = 5)
+      ['1000,Alice,hello,55,60,3,999'] + (1..count).flat_map do |index|
+        ['', "#{1000 + index},Own,Test codificacion #{index},777,60,3,999"]
+      end
+    end
+
+    def batch(count: 5, bodies: successful_bodies(count), **options)
+      run_fake(extra: ['--send-count', count.to_s], batch_bodies: bodies, **options)
+    end
+
+    it 'executes exactly thirteen real CLI RPCs with confirmation before every next wire' do
+      result = batch
+      expect(result['calls']).to eq(%w[auth_id_password player_get_info chat_display] + %w[chat_send chat_display] * 5), result['summary'].inspect
+      expect(result['summary']).to include('classification' => 'batch-confirmed', 'confirmed_count' => 5,
+                                         'reserved_count' => 5, 'possibly_dispatched_count' => 5)
+      expect(result['trace'].select { |entry| entry['rpc'] == 'chat_send' }.map { |entry| entry['text'] }).to eq((1..5).map { |n| "Test codificacion #{n}" })
+      expect(result['trace'].all? { |entry| entry.values_at('room_ok', 'owner_ok', 'session_ok').all? }).to be(true)
+      expect(result['trace'].drop(3).map { |entry| entry['cursor'] }).to eq((1000..1004).flat_map { |n| [n.to_s, n.to_s] })
+      expect(result['config_readers']).to eq([File.expand_path('../lib/cli/sandbox.rb', __dir__)])
+      expect(result['polling']).to eq(0)
+      expect(JSON.generate(result['summary'])).not_to include('777', 'SYNTHETIC_SESSION', 'synthetic-password', 'Own', 'Test codificacion')
+    end
+
+    [1, 2, 3, 4].each do |count|
+      it "supports only the exact authorized prefix of #{count} messages" do
+        result = batch(count: count)
+        expect(result['calls'].length).to eq(3 + 2 * count)
+        expect(result['summary']).to include('classification' => 'batch-confirmed', 'confirmed_count' => count)
+      end
+    end
+
+    %w[0 6 -1 1.0 01 five].each do |count|
+      it "refuses count #{count} before CLI config loading or HTTP" do
+        result = batch(count: count, bodies: [])
+        expect(result['calls']).to be_empty
+        expect(result['config_readers']).to be_empty
+        expect(result['summary']['classification']).to eq('options-refused')
+      end
+    end
+
+    [4, 5, 8, 9].each do |ordinal|
+      { timeout_at: 'transport-timeout', status_at: 'http-error' }.each do |option, classification|
+        it "stops #{classification} at batch wire #{ordinal} with no subsequent RPC" do
+          result = batch(**{ option => ordinal })
+          expect(result['calls'].length).to eq(ordinal)
+          confirmed = (ordinal - 4) / 2
+          expect(result['summary']).to include('classification' => classification, 'confirmed_count' => confirmed,
+                                             'reserved_count' => confirmed + 1, 'possibly_dispatched_count' => confirmed + 1)
+        end
+      end
+    end
+
+    [3, 4, 5, 8, 9].each do |ordinal|
+      ['Exception,private body', 'bad', '1001,Own,text,no,60,3,999', '1001,Own,text,777,60,3,no'].each do |body|
+        it "rejects malformed response at wire #{ordinal} before CLI advances" do
+          bodies = successful_bodies
+          bodies[ordinal - 3] = body
+          result = batch(bodies: bodies)
+          expect(result['calls'].length).to eq(ordinal)
+          expect(result['summary']['classification']).to eq('chat-malformed')
+          expect(JSON.generate(result['summary'])).not_to include(body)
+        end
+      end
+    end
+
+    ['', '1001,Other,Test codificacion 1,778,60,3,999', '1001,Own,wrong text,777,60,3,999'].each do |body|
+      it 'halts on an absent, wrong-owner or wrong-text read echo' do
+        bodies = successful_bodies
+        bodies[2] = body
+        result = batch(bodies: bodies)
+        expect(result['calls'].length).to eq(5)
+        expect(result['summary']).to include('classification' => 'echo-unconfirmed', 'confirmed_count' => 0)
+      end
+    end
+
+    it 'uses validated request room rather than country as publication provenance' do
+      bodies = successful_bodies(1)
+      bodies[2] = '1001,Own,Test codificacion 1,777,60,3,1'
+      result = batch(count: 1, bodies: bodies)
+      expect(result['calls'].length).to eq(5)
+      # The production aggregate still conflates country with room. Preserve
+      # its failure honestly, but never discard the guard's actual evidence.
+      expect(result['summary']).to include('classification' => 'cli-failed', 'cli_exit' => 1, 'confirmed_count' => 1)
+    end
+
+    it 'rejects baseline identity reuse even with changed name, level, rank or country' do
+      bodies = successful_bodies
+      bodies[0] = '1000,Own,Test codificacion 1,777,60,3,999'
+      bodies[2] = '1000,Renamed,Test codificacion 1,777,70,4,1'
+      result = batch(bodies: bodies)
+      expect(result['calls'].length).to eq(5)
+      expect(result['summary']).to include('classification' => 'echo-unconfirmed', 'confirmed_count' => 0)
+    end
+
+    it 'remembers early future-message echoes across all observed responses' do
+      bodies = successful_bodies
+      bodies[1] = '1002,Own,Test codificacion 2,777,60,3,999'
+      result = batch(bodies: bodies)
+      expect(result['calls'].length).to eq(7)
+      expect(result['summary']).to include('classification' => 'echo-unconfirmed', 'confirmed_count' => 1)
+    end
+
+    it 'never confirms from SEND and preserves its consumed cursor on the required empty READ' do
+      bodies = successful_bodies
+      bodies[1] = bodies[2]
+      bodies[2] = ''
+      result = batch(bodies: bodies)
+      expect(result['calls'].length).to eq(5)
+      expect(result['trace'][4]['cursor']).to eq('1001')
+      expect(result['cursor']).to eq('1001')
+      expect(result['summary']).to include('classification' => 'echo-unconfirmed', 'confirmed_count' => 0)
+    end
+
+    it 'refuses per-send directory sync failure before the first SEND' do
+      result = batch(disk_failure: 'send-directory')
+      expect(result['calls']).to eq(%w[auth_id_password player_get_info chat_display])
+      expect(result['summary']).to include('classification' => 'reservation-failed', 'possibly_dispatched_count' => 0)
+    end
+
+    it 'rejects a future echo already present in the baseline' do
+      bodies = successful_bodies
+      bodies[0] = bodies[4]
+      result = batch(bodies: bodies)
+      expect(result['calls'].length).to eq(7)
+      expect(result['summary']).to include('classification' => 'echo-unconfirmed', 'confirmed_count' => 1)
+    end
+
+    it 'refuses an incomplete ledger write before dispatch, not merely after the batch' do
+      result = batch(disk_failure: 'short-write')
+      expect(result['calls']).to eq(%w[auth_id_password player_get_info chat_display])
+      expect(result['summary']).to include('classification' => 'reservation-failed', 'possibly_dispatched_count' => 0)
+    end
+
+    ['send-1.json', 'send-3.json'].each do |filename|
+      it "stops #{filename} durability failure before its mutative wire" do
+        result = batch(disk_failure: filename)
+        index = filename[/\d+/].to_i
+        expect(result['calls'].length).to eq(3 + 2 * (index - 1))
+        expect(result['summary']).to include('classification' => 'reservation-failed', 'confirmed_count' => index - 1,
+                                           'reserved_count' => index - 1, 'possibly_dispatched_count' => index - 1)
+      end
+    end
+
+    it 'halts at an unconfirmed first read instead of issuing the next mutative wire' do
+      bodies = successful_bodies
+      bodies[2] = ''
+      result = batch(bodies: bodies)
+      expect(result['calls']).to eq(%w[auth_id_password player_get_info chat_display chat_send chat_display]), result['summary'].inspect
+      expect(result['summary']).to include('classification' => 'echo-unconfirmed', 'confirmed_count' => 0)
     end
   end
 
