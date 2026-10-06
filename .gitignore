@@ -1,0 +1,56 @@
+# Versioned privacy and generated-artifact policy for ta-hackers.
+# Local-only excludes may still live in .git/info/exclude, but new clones need these
+# high-risk defaults. These rules do not remove files already tracked by Git.
+
+# Private configs and credentials. Keep the public default config tracked.
+/configs/*
+!/configs/default.conf
+credentials*.json
+credentials*.conf
+credentials*.yaml
+credentials*.yml
+.credentials*.json
+.credentials*.conf
+.credentials*.yaml
+.credentials*.yml
+
+# Environment files are local secrets unless an example is deliberately public.
+.env
+.env.*
+!.env.example
+
+# Private keys and certificate bundles.
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Local account state, private notes, and logs.
+/accounts/
+/private/
+/logs/
+*.log
+
+# Received upstream/client copies and mobile build artifacts.
+/ta-hackers/
+/APKs/
+*.apk
+*.APK
+*.aab
+*.AAB
+
+# Raw captures stay private; keep the placeholder policy file tracked.
+/dumps/*
+!/dumps/.gitignore
+
+# Local indexes and Ruby-generated caches.
+/.codegraph/
+/.atl/
+/.bundle/
+/coverage/
+/.yardoc/
+/tmp/
+
+# Do not blanket-ignore public data, JSON, conf, source, tests, docs, scripts, or tasks.
+# Examples intended to remain trackable include data/countries.conf, Gemfile.lock,
+# lib/, bin/, scripts/, spec/, docs/, and odd/.
