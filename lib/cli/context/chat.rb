@@ -3,6 +3,9 @@
 require 'thread'
 
 CHAT_ROOMS = {}
+# Protect only registry ownership and local dataset open/close operations.
+# Never hold this mutex during polling, output, kill or join.
+CHAT_ROOMS_LOCK = Mutex.new
 CHAT_LOG_CHAR = "\u2764"
 CHAT_LIST_CHAR = "\u2022"
 CHAT_TALK_CHAR = "\u2765"
@@ -108,7 +111,9 @@ def chat_read(shell, room)
     begin
       messages = GAME.chat.read(room)
     rescue Hackers::RequestError => e
-      LOGGER.error("Chat read (#{e})")
+      # Response bodies and exception messages may contain private data.
+      # If output itself fails, the outer ensure still tears down ownership.
+      LOGGER.error("Chat read (#{e.class})")
       break
     else
       # The room disappeared from the local bookkeeping: stop instead of
@@ -121,8 +126,15 @@ def chat_read(shell, room)
     sleep(chat_poll_interval)
   end
 
-  CHAT_ROOMS.delete(room)
-  GAME.chat.close(room) if GAME.chat.opened?(room)
+ensure
+  CHAT_ROOMS_LOCK.synchronize do
+    # An explicit close/reopen may have installed another reader while this
+    # one was unwinding. Only the exact owning thread may tear down its room.
+    if CHAT_ROOMS[room].equal?(Thread.current)
+      CHAT_ROOMS.delete(room)
+      GAME.chat.close(room) if GAME.chat.opened?(room)
+    end
+  end
 end
 
 def chat_log(shell, room, messages)
@@ -166,13 +178,32 @@ CONTEXT_CHAT_OPEN = CONTEXT_CHAT.add_command(
   end
 
   room = tokens[1].to_i
-  if CHAT_ROOMS.key?(room)
-    shell.puts("Room #{room} already opened")
-    next
-  end
+  started = CHAT_ROOMS_LOCK.synchronize do
+    next false if CHAT_ROOMS.key?(room)
 
-  GAME.chat.open(room)
-  CHAT_ROOMS[room] = Thread.new { chat_read(shell, room) }
+    GAME.chat.open(room)
+    gate = Queue.new
+    worker = Thread.new do
+      gate.pop
+      begin
+        chat_read(shell, room)
+      rescue StandardError => e
+        # chat_read has already cleaned up. Retain the original failure even
+        # if the UI cannot report its safe class; never print its raw body.
+        begin
+          LOGGER.error("Chat poller (#{e.class})")
+        rescue StandardError
+          # Output is unavailable; the original exception remains observable.
+        end
+        raise
+      end
+    end
+    worker.report_on_exception = false
+    CHAT_ROOMS[room] = worker
+    gate << true
+    true
+  end
+  shell.puts("Room #{room} already opened") unless started
 end
 
 CONTEXT_CHAT_OPEN.completion do |line|
@@ -187,14 +218,19 @@ CONTEXT_CHAT_CLOSE = CONTEXT_CHAT.add_command(
   params: ['<room>']
 ) do |tokens, shell|
   room = tokens[1].to_i
-  unless CHAT_ROOMS.key?(room)
+  worker = CHAT_ROOMS_LOCK.synchronize do
+    owner = CHAT_ROOMS.delete(room)
+    GAME.chat.close(room) unless owner.nil?
+    owner
+  end
+  if worker.nil?
     shell.puts('No such opened room')
     next
   end
 
-  CHAT_ROOMS[room].kill
-  CHAT_ROOMS.delete(room)
-  GAME.chat.close(room)
+  # Detach and close locally first, then interrupt outside the mutex. A slow
+  # old ensure cannot block close or tear down a subsequently reopened room.
+  worker.kill
 end
 
 CONTEXT_CHAT_CLOSE.completion do |line|

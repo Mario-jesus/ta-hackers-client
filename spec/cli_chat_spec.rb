@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'stringio'
+require 'timeout'
 
 require 'cli/colorterm'
 require 'sandbox'
@@ -290,6 +291,190 @@ RSpec.describe 'CLI chat context' do
     end
   end
 
+  describe 'poller ownership and teardown' do
+    before do
+      allow(GAME).to receive(:connected?).and_return(true)
+      @workers = []
+    end
+
+    after do
+      @workers.each do |worker|
+        worker.kill if worker.alive?
+        worker.join(2) rescue StandardError
+      end
+    end
+
+    def await_worker(worker)
+      expect(worker.join(2)).to equal(worker)
+      worker.value
+    end
+
+    def owned_worker(shell = SHELL)
+      gate = Queue.new
+      worker = Thread.new do
+        Thread.current.report_on_exception = false
+        gate.pop
+        chat_read(shell, 999)
+      end
+      @workers << worker
+      GAME.chat.open(999)
+      CHAT_ROOMS[999] = worker
+      gate << true
+      worker
+    end
+
+    it 'cleans up and propagates an unexpected output failure without reporting its body' do
+      output = double('failing output')
+      message = Hackers::Serializer::Chat::Data.new('1000', 'Synthetic', 'hello', 55, 60, 3, 999)
+      allow(GAME.chat).to receive(:read).with(999).and_return([message])
+      allow(output).to receive(:puts).and_raise(NoMethodError, 'PRIVATE synthetic body')
+      worker = owned_worker(output)
+
+      expect { await_worker(worker) }.to raise_error(NoMethodError, /PRIVATE synthetic body/)
+      expect(CHAT_ROOMS).not_to have_key(999)
+      expect(GAME.chat).not_to be_opened(999)
+      expect(SHELL_OUTPUT.string).not_to include('PRIVATE synthetic body')
+    end
+
+    it 'cleans up even when request-error reporting fails' do
+      allow(GAME.chat).to receive(:read).and_raise(Hackers::RequestError.new('HTTP', 'PRIVATE'))
+      allow(LOGGER).to receive(:error).and_raise(IOError, 'output unavailable')
+      worker = owned_worker
+
+      expect { await_worker(worker) }.to raise_error(IOError)
+      expect(CHAT_ROOMS).not_to have_key(999)
+      expect(GAME.chat).not_to be_opened(999)
+    end
+
+    it 'does not print a request-error response body' do
+      allow(GAME.chat).to receive(:read).and_raise(Hackers::RequestError.new('HTTP', 'PRIVATE'))
+      await_worker(owned_worker)
+
+      expect(SHELL_OUTPUT.string).not_to include('PRIVATE')
+      expect(SHELL_OUTPUT.string).to include('Hackers::RequestError')
+    end
+
+    it 'publishes ownership before an immediately terminating worker executes' do
+      original_new = Thread.method(:new)
+      # Force the worker to reach its first blocking point or completion before
+      # Thread.new returns. A registered start barrier must block it before read.
+      allow(Thread).to receive(:new) do |&block|
+        worker = original_new.call(&block)
+        @workers << worker
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
+        until !worker.alive? || worker.status == 'sleep'
+          raise 'worker did not reach start boundary' if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+          Thread.pass
+        end
+        worker
+      end
+      owners = Queue.new
+      allow(GAME.chat).to receive(:read) do
+        owners << CHAT_ROOMS[999]
+        nil
+      end
+
+      run_chat(:open, '999')
+      @workers.last.join(2)
+      expect(@workers.last).not_to be_alive
+      observed = owners.pop
+
+      expect(observed).to equal(@workers.last)
+      expect(CHAT_ROOMS).not_to have_key(999)
+      expect(GAME.chat).not_to be_opened(999)
+    end
+
+    it 'retains unexpected worker errors without automatic raw thread reports' do
+      allow(GAME.chat).to receive(:read).and_raise(IOError, 'PRIVATE worker body')
+      expect(LOGGER).to receive(:error).with('Chat poller (IOError)') do
+        expect(CHAT_ROOMS).not_to have_key(999)
+        expect(GAME.chat).not_to be_opened(999)
+        raise NoMethodError, 'reporting unavailable'
+      end
+      original_new = Thread.method(:new)
+      allow(Thread).to receive(:new) do |&block|
+        original_new.call(&block).tap { |created| @workers << created }
+      end
+      run_chat(:open, '999')
+      worker = @workers.last
+      expect { await_worker(worker) }.to raise_error(IOError, 'PRIVATE worker body')
+      expect(worker.report_on_exception).to be(false)
+    end
+
+    it 'renders a successful poll before kill cleans up its ownership' do
+      output = double('output')
+      rendered = Queue.new
+      message = Hackers::Serializer::Chat::Data.new('1000', 'Synthetic', 'hello', 55, 60, 3, 999)
+      allow(GAME.chat).to receive(:read).and_return([message])
+      allow(output).to receive(:puts) { |line| rendered << line }
+      worker = owned_worker(output)
+
+      expect(Timeout.timeout(2) { rendered.pop }).to include('Synthetic', 'hello')
+      worker.kill
+      expect(worker.join(2)).to equal(worker)
+      expect(CHAT_ROOMS).not_to have_key(999)
+      expect(GAME.chat).not_to be_opened(999)
+    end
+
+    it 'cleans up a killed blocked reader and permits reopening' do
+      read = Queue.new
+      hold = Queue.new
+      allow(GAME.chat).to receive(:read) { read << true; hold.pop }
+      worker = owned_worker
+      Timeout.timeout(2) { read.pop }
+      worker.kill
+      worker.join(2)
+
+      expect(CHAT_ROOMS).not_to have_key(999)
+      expect(GAME.chat).not_to be_opened(999)
+      allow(GAME.chat).to receive(:read).and_return(nil)
+      run_chat(:open, '999')
+      reopened = CHAT_ROOMS[999]
+      @workers << reopened if reopened
+      await_worker(reopened) unless reopened.nil?
+      expect(CHAT_ROOMS).not_to have_key(999)
+      expect(GAME.chat).not_to be_opened(999)
+    end
+
+    it 'does not let a delayed old ensure close or delete a reopened room' do
+      reached = Queue.new
+      release = Queue.new
+      finishing = Queue.new
+      finish = Queue.new
+      # Delay unwinding inside read so the poller's ensure runs only after
+      # explicit close has removed its slot and a new owner has reopened it.
+      allow(GAME.chat).to receive(:read) do
+        begin
+          reached << true
+          release.pop
+        ensure
+          finishing << true
+          finish.pop
+        end
+      end
+      old = owned_worker
+      Timeout.timeout(2) { reached.pop }
+      # Defer kill to model a reader already completing a normal nil response.
+      allow(old).to receive(:kill).and_return(old)
+      run_chat(:close, '999')
+      release << nil
+      Timeout.timeout(2) { finishing.pop }
+      allow(GAME.chat).to receive(:read) { reached << true; release.pop }
+      run_chat(:open, '999')
+      newer = CHAT_ROOMS.fetch(999)
+      @workers << newer
+      Timeout.timeout(2) { reached.pop }
+      finish << true
+      old.join(2)
+
+      expect(CHAT_ROOMS[999]).to equal(newer)
+      expect(GAME.chat).to be_opened(999)
+      expect(newer).to be_alive
+      run_chat(:close, '999')
+    end
+  end
+
   describe 'poll thread error handling' do
     it 'stops polling and cleans up after a request error instead of looping' do
       allow(GAME.api).to receive(:sid).and_return('SIDTEST123')
@@ -298,7 +483,10 @@ RSpec.describe 'CLI chat context' do
         .and_raise(Hackers::RequestError.new('HTTP', 'boom'))
 
       GAME.chat.open(999)
-      thread = Thread.new { chat_read(SHELL, 999) }
+      gate = Queue.new
+      thread = Thread.new { gate.pop; chat_read(SHELL, 999) }
+      CHAT_ROOMS[999] = thread
+      gate << true
       thread.join(5)
 
       expect(thread.alive?).to be(false)
