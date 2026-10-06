@@ -204,7 +204,7 @@ RSpec.describe 'CLI chat context' do
       ]
       messages = [Hackers::Serializer::Chat::Data.new('1001', 'TestHero', 'First', 777, 60, 3, 999)]
 
-      batch_note_chat_messages(messages)
+      batch_note_chat_messages(messages, room: 999)
 
       expect(CLI_RESULTS[:sent_messages].map { |send| send[:confirmed] }).to eq([true, false])
       expect(CLI_RESULTS[:own_message_seen]).to be(false)
@@ -218,8 +218,9 @@ RSpec.describe 'CLI chat context' do
       ]
       messages = [Hackers::Serializer::Chat::Data.new('1001', 'TestHero', 'Same', 777, 60, 3, 999)]
 
-      batch_note_chat_messages(messages)
-      batch_note_chat_messages(messages)
+      batch_note_chat_messages(messages, room: 999)
+      changed_metadata = [Hackers::Serializer::Chat::Data.new('1001', 'Renamed', 'Same', 777, 70, 4, 4)]
+      batch_note_chat_messages(changed_metadata, room: 999)
 
       expect(CLI_RESULTS[:sent_messages].map { |send| send[:confirmed] }).to eq([true, false])
       expect(CLI_RESULTS[:chat_publication_status]).to eq('unconfirmed')
@@ -228,11 +229,11 @@ RSpec.describe 'CLI chat context' do
     it 'does not let an owned echo observed before sending confirm a future send' do
       stale_echo = [Hackers::Serializer::Chat::Data.new('1001', 'TestHero', 'Same', 777, 60, 3, 999)]
 
-      batch_note_chat_messages(stale_echo)
+      batch_note_chat_messages(stale_echo, room: 999)
       CLI_RESULTS[:sent_messages] = [
         { id: 1, room: 999, message: 'Same', confirmed: false }
       ]
-      batch_note_chat_messages(stale_echo)
+      batch_note_chat_messages(stale_echo, room: 999)
 
       expect(CLI_RESULTS[:sent_messages].map { |send| send[:confirmed] }).to eq([false])
       expect(CLI_RESULTS[:chat_publication_status]).to eq('unconfirmed')
@@ -248,7 +249,7 @@ RSpec.describe 'CLI chat context' do
         Hackers::Serializer::Chat::Data.new('1002', 'TestHero', 'Same', 777, 60, 3, 999)
       ]
 
-      batch_note_chat_messages(messages)
+      batch_note_chat_messages(messages, room: 999)
 
       expect(CLI_RESULTS[:sent_messages].map { |send| send[:confirmed] }).to eq([true, true])
       expect(CLI_RESULTS[:chat_publication_status]).to eq('confirmed')
@@ -264,10 +265,22 @@ RSpec.describe 'CLI chat context' do
         Hackers::Serializer::Chat::Data.new('1001', 'TestHero', 'Same', 777, 60, 3, 1000)
       ]
 
-      batch_note_chat_messages(messages)
+      batch_note_chat_messages([messages.first], room: 999)
+      batch_note_chat_messages([messages.first], room: 1000)
 
       expect(CLI_RESULTS[:sent_messages].map { |send| send[:confirmed] }).to eq([true, true])
       expect(CLI_RESULTS[:chat_publication_status]).to eq('confirmed')
+    end
+
+    it 'rejects wrong caller room, owner and text despite matching country' do
+      CLI_RESULTS[:sent_messages] = [{ id: 1, room: 999, message: 'Same', confirmed: false }]
+      echo = Hackers::Serializer::Chat::Data.new('1001', 'TestHero', 'Same', 777, 60, 3, 999)
+      batch_note_chat_messages([echo], room: 1000)
+      batch_note_chat_messages([Hackers::Serializer::Chat::Data.new('1002', 'Other', 'Same', 778, 60, 3, 999)], room: 999)
+      batch_note_chat_messages([Hackers::Serializer::Chat::Data.new('1003', 'TestHero', 'Other', 777, 60, 3, 999)], room: 999)
+
+      expect(CLI_RESULTS[:sent_messages].first[:confirmed]).to be(false)
+      expect(CLI_RESULTS[:chat_last_read_count]).to eq(1)
     end
 
     it 'does not close an existing poll room' do

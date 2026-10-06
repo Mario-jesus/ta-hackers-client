@@ -9,8 +9,8 @@ the goal is partial. No further server call is authorized; see the observed
 live outcome below.
 
 This immediate batch does **not** repair the interactive terminal. T1 and T0a
-are closed; T0b is paused with its six-case/two-failure candidate preserved in
-stash `94f3dcf1356e5c767e7a7c2357cd8d8413e7a3d2`. T2 closed at `be7e033`
+are closed; T0b has resumed offline feasibility checks but is not fixed. Its
+six-case/two-failure candidate remains preserved in stash `94f3dcf1356e5c767e7a7c2357cd8d8413e7a3d2`. T2 closed at `be7e033`
 with independent verification and final native acknowledgement; T3 remains
 unchecked. See `odd/tasks/cli-authenticated-chat-tests.md`.
 
@@ -21,8 +21,9 @@ unchecked. See `odd/tasks/cli-authenticated-chat-tests.md`.
 3. Review the subprocess spec: actual entrypoint, signing, serializers and
    command dispatch execute against synthetic Net::HTTP responses only.
 
-Rollback remains the helper, its spec, this guide and feature-tracker changes.
-No production CLI, Dataset, API, auth, serializer or transport source changed.
+T2 rollback remains the helper, its spec, this guide and feature-tracker changes.
+T4 additionally changes only production CLI room attribution and its batch/chat
+regressions. Dataset, API, auth, serializer, transport and helper source are unchanged.
 The human-selected `feature-branch-chain` strategy retains the cohesive safety
 unit despite the advisory 400-line budget; coverage is not compressed to fit it.
 
@@ -81,16 +82,18 @@ single subsequent READ is still required. If that READ is empty or cannot
 provide a fresh echo, stop with `echo-unconfirmed`, confirmed count unchanged.
 Do **not** rewind/reset the cursor, add a READ, repeat the SEND or continue.
 
-### Existing CLI aggregate limitation
+### CLI country/room compatibility: resolved offline by T4
 
-Production batch bookkeeping currently conflates parsed country with room.
-The helper instead derives room provenance from the validated request. A valid
-owned READ echo with country other than 999 can therefore increment the guard's
-actual `confirmed_count` while the existing CLI exits 1. The helper honestly
-returns `cli-failed`/nonzero exit and retains that count; it does not force
-success or mask the compatibility failure. Fixing that aggregate is outside
-this slice. Safe publication evidence and overall CLI compatibility are
-separate claims, and neither establishes interactive-terminal correctness.
+Historically, production aggregate bookkeeping conflated parsed country with
+room: a guard-confirmed READ could still produce `cli-failed`/CLI exit 1.
+T4 now passes the validated caller room explicitly into matching and identity
+tracking. Country remains parsed metadata, not publication provenance; display
+behavior is unchanged. Country 4 in room 999 now yields `batch-confirmed` and
+CLI exit 0 in real synthetic CLI tests, including five confirmations in exactly
+13 RPCs. Owner, exact text and conservative freshness checks remain intact.
+The unchanged helper still requires a fresh owned subsequent READ; SEND echoes
+alone never satisfy that policy. This resolves the known local compatibility
+bug, not the unknown historical T3 cause or interactive-terminal correctness.
 
 ## Private evidence and public outcomes
 
@@ -144,6 +147,25 @@ Historical T1 evidence remains separate: initial RED 2/2, correction SID RED
 passing. T0a subsequently established the reviewed 936-example baseline.
 Parent owns commit, assessment and native lifecycle. These offline results
 belong to the unchanged source unit, not new tests of this passive report.
+
+## T4 observed offline regression evidence
+
+- RED: country-focused real CLI regressions observed 3 examples/2 failures
+  before production edits (guard-confirmed but CLI exit 1). The initial whole
+  focused run timed out at 120 seconds; no completed count is claimed.
+- GREEN: country focus 3/0 (0.53s); auth guard plus batch 135/0 (15.54s);
+  relevant auth/batch/chat/connect/minimal-auth 190/0 (15.87s); API-focused
+  variants 217/0 (15.26s); full suite 996/0 (15.84s), no pending reported.
+- A synthetic batch fixture initially lacked profile/own-ID initialization;
+  corrected by the real `name` command, not by weakening production identity.
+- Alternate cases reject wrong caller room even when country matches, wrong
+  owner/text and reuse despite changed country/name/experience/rank. Identical
+  own-ID/datetime/text in independently qualified rooms has distinct identity.
+  Last-read counts remain message counts. Helpers pass 24+10 self-tests only;
+  production chat and all three modified specs pass syntax checks.
+- T4 remains unchecked pending parent commit/assessment/final native lifecycle.
+  T0a ownership/cleanup and all helper transport/reservation/READ gates remain
+  unchanged. No backend calls, GUI success or real publication proof claimed.
 
 ## Observed bounded live attempt
 

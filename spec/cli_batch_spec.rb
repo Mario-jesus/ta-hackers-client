@@ -341,6 +341,17 @@ RSpec.describe 'bin/sandbox batch entrypoint' do
       expect(summary['commands'].map { |c| c['ok'] }).to eq([true] * 6)
     end
 
+    it 'confirms a read echo in the caller room despite different country metadata' do
+      out, _err, status, calls_path, _config = run_sandbox(
+        ['-m', '-e', 'connect', '-e', 'name', '-e', 'chat say 999 Test', '-e', 'chat read 999', '--json'],
+        chat_send_payload: '1000,Other,hello,55,60,3,4', chat_read_payload: '1001,TestHero,Test,777,60,3,4'
+      )
+
+      expect(status.exitstatus).to eq(0)
+      expect(recorded_calls(calls_path).map(&:first)).to eq(%w[auth_id_password player_get_info chat_send chat_display])
+      expect(json_summary(out)).to include('own_message_seen' => true, 'chat_message_count' => 1)
+    end
+
     it 'skips the rename when the cached own name is already exact' do
       out, _err, status, calls_path, _config = run_sandbox(
         ['-m', '-e', 'connect', '-e', 'name', '-e', "rename 'TestHero'", '--json']

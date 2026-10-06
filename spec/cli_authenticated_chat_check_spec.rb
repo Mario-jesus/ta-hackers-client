@@ -363,8 +363,8 @@ RSpec.describe CliAuthenticatedChatCheck do
 
   describe 'bounded protected CLI batch' do
     def successful_bodies(count = 5)
-      ['1000,Alice,hello,55,60,3,999'] + (1..count).flat_map do |index|
-        ['', "#{1000 + index},Own,Test codificacion #{index},777,60,3,999"]
+      ['1000,Alice,hello,55,60,3,4'] + (1..count).flat_map do |index|
+        ['', "#{1000 + index},Own,Test codificacion #{index},777,60,3,4"]
       end
     end
 
@@ -439,12 +439,10 @@ RSpec.describe CliAuthenticatedChatCheck do
 
     it 'uses validated request room rather than country as publication provenance' do
       bodies = successful_bodies(1)
-      bodies[2] = '1001,Own,Test codificacion 1,777,60,3,1'
+      bodies[2] = '1001,Own,Test codificacion 1,777,60,3,4'
       result = batch(count: 1, bodies: bodies)
       expect(result['calls'].length).to eq(5)
-      # The production aggregate still conflates country with room. Preserve
-      # its failure honestly, but never discard the guard's actual evidence.
-      expect(result['summary']).to include('classification' => 'cli-failed', 'cli_exit' => 1, 'confirmed_count' => 1)
+      expect(result['summary']).to include('classification' => 'batch-confirmed', 'cli_exit' => 0, 'confirmed_count' => 1)
     end
 
     it 'rejects baseline identity reuse even with changed name, level, rank or country' do

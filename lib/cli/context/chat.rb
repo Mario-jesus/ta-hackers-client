@@ -49,7 +49,7 @@ end
 ##
 # Records safe batch evidence from structured chat message fields only.
 # Messages are never interpreted as commands or batch status.
-def batch_note_chat_messages(messages)
+def batch_note_chat_messages(messages, room:)
   CLI_RESULTS[:chat_last_read_count] = messages.length
   own_id = CLI_RESULTS[:own_id]
   sent = CLI_RESULTS[:sent_messages] || []
@@ -59,10 +59,10 @@ def batch_note_chat_messages(messages)
   messages.each do |message|
     next unless message.id == own_id
 
-    identity = batch_chat_message_identity(message)
+    identity = batch_chat_message_identity(message, room: room)
     unless observed.key?(identity)
       pending = sent.detect do |outgoing|
-        !outgoing[:confirmed] && outgoing[:room] == message.country && outgoing[:message] == message.message
+        !outgoing[:confirmed] && outgoing[:room] == room && outgoing[:message] == message.message
       end
       pending[:confirmed] = true unless pending.nil?
     end
@@ -76,8 +76,8 @@ end
 # Conservative per-message identity for confirmation reuse detection. The
 # native chat schema does not expose a stable message id, so identical own-id,
 # datetime, room and exact text is treated as the same observed echo.
-def batch_chat_message_identity(message)
-  [message.id, message.datetime, message.country, message.message]
+def batch_chat_message_identity(message, room:)
+  [message.id, message.datetime, room, message.message]
 end
 
 ##
@@ -284,7 +284,7 @@ CONTEXT_CHAT_READ = CONTEXT_CHAT.add_command(
   LOGGER.log("Chat read: #{messages.length} message(s)")
 
   GAME.chat.close(room) if opened_here
-  batch_note_chat_messages(messages)
+  batch_note_chat_messages(messages, room: room)
 rescue Hackers::RequestError => e
   LOGGER.error("Chat read (#{e})")
   GAME.chat.close(room) if opened_here
@@ -320,7 +320,7 @@ CONTEXT_CHAT_SAY = CONTEXT_CHAT.add_command(
 
   GAME.chat.close(room) if opened_here
   batch_record_chat_send(room, text)
-  batch_note_chat_messages(messages)
+  batch_note_chat_messages(messages, room: room)
 rescue Hackers::RequestError => e
   LOGGER.error("Chat write (#{e})")
   GAME.chat.close(room) if opened_here
