@@ -35,8 +35,15 @@ module Hackers
     end
 
     def load
-      @raw_data = @api.missions_list
-      parse
+      @raw_data = nil
+      @missions = []
+
+      raw_data = @api.missions_list
+      records = Serializer.parseData(raw_data)[0]
+      missions = parse(records)
+      @missions = missions
+      @raw_data = raw_data
+      records
     end
 
     def exist?(mission)
@@ -53,12 +60,17 @@ module Hackers
 
     private
 
-    def parse
-      data = Serializer.parseData(@raw_data)
+    def parse(records)
+      unless records.is_a?(Array)
+        raise Serializer::ParserError, 'Missing missions section 0'
+      end
 
-      @missions.clear
-      data[0].each do |record|
-        @missions << Mission.new(
+      records.each_with_index.map do |record, index|
+        unless record.is_a?(Array) && record[0].is_a?(String) && record[0].match?(/\A[+-]?\d+\z/)
+          raise Serializer::ParserError, "Invalid mission ID at record #{index}"
+        end
+
+        Mission.new(
           record[0].to_i,
           record[1],
           Serializer.normalizeData(record[2]),
