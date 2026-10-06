@@ -96,8 +96,13 @@ module Hackers
       raw_data = @api.auth
       data = Serializer.parseData(raw_data)
 
+      sid = data.dig(0, 0, 3)
+      if sid.nil? || sid.to_s.empty?
+        raise Hackers::RequestError.new('Auth', 'empty session id')
+      end
+
       @player.tutorial = data.dig(0, 0, 2).to_i
-      @api.sid = data.dig(0, 0, 3)
+      @api.sid = sid
       @player.profile.rank = data.dig(0, 0, 4).to_i
       @player.profile.experience = data.dig(0, 0, 5).to_i
 

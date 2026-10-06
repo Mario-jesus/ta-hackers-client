@@ -94,6 +94,24 @@ RSpec.describe Hackers::Game do
     end
   end
 
+  describe '#auth invalid session' do
+    ['', nil].each do |sid|
+      it "rejects #{sid.inspect} before tutorial, profile or mission mutation" do
+        data = [[['0', '0', '7', sid, '4', '500']], [], []]
+        allow(Hackers::Serializer).to receive(:parseData).with(AUTH_PAYLOAD).and_return(data)
+        expect(game.player).not_to receive(:tutorial=)
+        expect(game.player.profile).not_to receive(:rank=)
+        expect(game.player.profile).not_to receive(:experience=)
+        expect(game.missions).not_to receive(:data=)
+        expect(game.missions).not_to receive(:parse)
+
+        expect { game.auth }.to raise_error(Hackers::RequestError, /empty session id/)
+        expect(game.api.sid).to be_nil
+        expect(requests.length).to eq(1)
+      end
+    end
+  end
+
   describe 'TLS inheritance and plaintext guard' do
     def pool_client_for(config)
       game = described_class.new(config)

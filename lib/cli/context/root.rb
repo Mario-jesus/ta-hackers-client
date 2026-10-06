@@ -156,6 +156,10 @@ SHELL.add_command(
   GAME.builders_list.load
   LOGGER.log(msg)
 
+  msg = 'Authenticate'
+  GAME.auth
+  LOGGER.log(msg)
+
   msg = 'Goal types'
   GAME.goal_types.load
   LOGGER.log(msg)
@@ -166,10 +170,6 @@ SHELL.add_command(
 
   msg = 'Rank list'
   GAME.rank_list.load
-  LOGGER.log(msg)
-
-  msg = 'Authenticate'
-  GAME.auth
   LOGGER.log(msg)
 rescue Hackers::RequestError => e
   LOGGER.error("#{msg} (#{e})")
