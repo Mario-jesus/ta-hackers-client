@@ -18,17 +18,19 @@ module Hackers
     ##
     # Normalizes data - special characters substitution
     def self.normalizeData(data, dir = true)
+      normalized = data.to_s.dup
+
       if dir
-        data&.gsub!(DELIM_SPEC_FIELD, DELIM_FIELD)
-        data&.gsub!(DELIM_SPEC_RECORD, DELIM_RECORD)
-        data&.gsub!(DELIM_SPEC_SECTION, DELIM_SECTION)
+        normalized.gsub!(DELIM_SPEC_FIELD, DELIM_FIELD)
+        normalized.gsub!(DELIM_SPEC_RECORD, DELIM_RECORD)
+        normalized.gsub!(DELIM_SPEC_SECTION, DELIM_SECTION)
       else
-        data&.gsub!(DELIM_FIELD, DELIM_SPEC_FIELD)
-        data&.gsub!(DELIM_RECORD, DELIM_SPEC_RECORD)
-        data&.gsub!(DELIM_SECTION, DELIM_SPEC_SECTION)
+        normalized.gsub!(DELIM_FIELD, DELIM_SPEC_FIELD)
+        normalized.gsub!(DELIM_RECORD, DELIM_SPEC_RECORD)
+        normalized.gsub!(DELIM_SECTION, DELIM_SPEC_SECTION)
       end
 
-      data
+      normalized
     end
 
     ##
@@ -36,7 +38,8 @@ module Hackers
     def self.parseData(data, delim1 = DELIM_SECTION, delim2 = DELIM_RECORD, delim3 = DELIM_FIELD)
       array = []
       begin
-        data.split(delim1).each.with_index do |section, i|
+        incoming = data.to_s.dup.force_encoding(Encoding::UTF_8).scrub
+        incoming.split(delim1).each.with_index do |section, i|
           array[i] = [] if array[i].nil?
           section.split(delim2).each.with_index do |record, j|
             array[i][j] = [] if array[i][j].nil?
@@ -67,7 +70,7 @@ module Hackers
       attr_reader :fields
 
       def initialize(data = nil)
-        @data = data.to_s
+        @data = data.to_s.dup.force_encoding(Encoding::UTF_8).scrub
 
         @fields = []
 
@@ -125,7 +128,7 @@ module Hackers
       end
 
       def normalize(data)
-        data.tr(
+        data.to_s.tr(
           [
             DELIM_SECTION_SPEC,
             DELIM_RECORD_SPEC,
@@ -140,7 +143,7 @@ module Hackers
       end
 
       def denormalize(data)
-        data.tr(
+        data.to_s.tr(
           [
             DELIM_SECTION_NORM,
             DELIM_RECORD_NORM,
