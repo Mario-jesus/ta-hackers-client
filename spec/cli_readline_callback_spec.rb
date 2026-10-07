@@ -364,6 +364,18 @@ RSpec.describe 'Standalone GNU Readline callback prototype' do
                 ['holaá', 'holaó']
               end
               event(events, utf8_completion: true)
+            when 'set-sole-utf8-completion'
+              api.completion = -> (prefix, full) do
+                completions << [prefix, full]
+                ['holá']
+              end
+              event(events, sole_utf8_completion: true)
+            when 'set-multi-utf8-completion'
+              api.completion = -> (prefix, full) do
+                completions << [prefix, full]
+                ['holáx', 'holáy']
+              end
+              event(events, multi_utf8_completion: true)
             when 'resize'
               api.resize
               event(events, resized: true)
@@ -687,6 +699,48 @@ RSpec.describe 'Standalone GNU Readline callback prototype' do
       expect(screen.unknown).to be_empty
       input.write("\r")
       expect(event_until(events, 'line')['line']).to eq('hola')
+      control.puts('quit')
+      expect(event_until(events, 'restored')['restored']).to be(true)
+    end
+  end
+
+  it 'keeps a sole complete UTF-8 candidate whole in the common prefix' do
+    with_callback_pty('complete') do |output, input, control, events, screen, _pid|
+      event_until(events, 'ready')
+      control.puts('set-sole-utf8-completion')
+      expect(event_until(events, 'sole_utf8_completion')['sole_utf8_completion']).to be(true)
+      input.write('hol')
+      expect(stabilize(control, events, 'buffer' => 'hol', 'point' => 3)).to eq('buffer' => 'hol', 'point' => 3)
+      input.write("\t")
+      # The whole candidate is the common prefix and ends at a valid codepoint:
+      # nothing may be dropped, and 'holá' must arrive whole (5 bytes/4 chars).
+      expect(stabilize(control, events, 'buffer' => 'holá', 'point' => 5)).to eq('buffer' => 'holá', 'point' => 5)
+      drain_screen(output, screen)
+      expect(screen.lines.first).to eq('p> holá')
+      expect(screen.unknown).to be_empty
+      input.write("\r")
+      expect(event_until(events, 'line')['line']).to eq('holá')
+      control.puts('quit')
+      expect(event_until(events, 'restored')['restored']).to be(true)
+    end
+  end
+
+  it 'keeps the complete trailing codepoint in an ambiguous UTF-8 common prefix' do
+    with_callback_pty('complete') do |output, input, control, events, screen, _pid|
+      event_until(events, 'ready')
+      control.puts('set-multi-utf8-completion')
+      expect(event_until(events, 'multi_utf8_completion')['multi_utf8_completion']).to be(true)
+      input.write('hol')
+      expect(stabilize(control, events, 'buffer' => 'hol', 'point' => 3)).to eq('buffer' => 'hol', 'point' => 3)
+      input.write("\t")
+      # ['holáx','holáy'] share the whole codepoint 'á'; the common prefix
+      # must be 'holá' (point 5), not the truncated 'hol'.
+      expect(stabilize(control, events, 'buffer' => 'holá', 'point' => 5)).to eq('buffer' => 'holá', 'point' => 5)
+      drain_screen(output, screen)
+      expect(screen.lines.first).to eq('p> holá')
+      expect(screen.unknown).to be_empty
+      input.write("\r")
+      expect(event_until(events, 'line')['line']).to eq('holá')
       control.puts('quit')
       expect(event_until(events, 'restored')['restored']).to be(true)
     end

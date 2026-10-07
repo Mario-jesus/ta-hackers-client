@@ -162,11 +162,20 @@ static VALUE completion_protect(VALUE data)
         while (k < limit && base[k] == other[k]) k++;
         if (k < common) common = k;
     }
-    while (common > 0) {
-        unsigned char last = (unsigned char)base[common - 1];
-        if (last < 0x80) break;
-        if ((last & 0xC0) == 0xC0) { common--; break; } /* lead without continuation */
-        common--; /* trailing continuation byte: incomplete sequence */
+    /* Back off only an INCOMPLETE trailing sequence: when the common prefix
+     * is shorter than the first candidate and the byte right after it is a
+     * continuation byte, the prefix splits a codepoint — walk back to the
+     * lead and drop the lead too. When the common prefix covers the whole
+     * first candidate, or ends exactly at a codepoint boundary, nothing is
+     * dropped and complete codepoints survive. */
+    if (common > 0 && common < RSTRING_LEN(first)) {
+        unsigned char next = (unsigned char)base[common];
+        if ((next & 0xC0) == 0x80) {
+            long boundary = common;
+            while (boundary > 0 && ((unsigned char)base[boundary - 1] & 0xC0) == 0x80) boundary--;
+            if (boundary > 0) boundary--; /* drop the lead byte too */
+            common = boundary;
+        }
     }
     /* Layout: with one candidate the registry holds only the unique match
      * (GNU then counts exactly one match). With several candidates slot 0
