@@ -139,7 +139,23 @@ GAME = Hackers::Game.new(config)
 GAME.countries_list.raw_data = File.read(File.join(DATA_DIR, COUNTRIES_FILE))
 GAME.countries_list.load
 
-SHELL = Sandbox::Shell.new(
+# Interactive selection happens on the actual stdin/stdout identities and
+# BEFORE any command can reach the backend: batch (-e) and nonTTY streams
+# keep the original plain shell and never load the native adapter.
+interactive = !options.key?(:execute) && $stdin.tty? && $stdout.tty?
+shell_class = Sandbox::Shell
+if interactive
+  require 'cli/interactive_shell'
+
+  begin
+    shell_class = Sandbox::InteractiveShell.selected_shell_class
+  rescue Sandbox::InteractiveShell::UnavailableError => e
+    warn(e.message)
+    exit(1)
+  end
+end
+
+SHELL = shell_class.new(
   prompt: ColorTerm.magenta.bold(" \u25b8 "),
   banner: BANNER
 )
