@@ -603,8 +603,8 @@ RSpec.describe Sandbox::InteractiveShell do
       end
     end
 
-    define_method(:await_output) do |master, pattern, message, timeout: 10|
-      collected = +''
+    define_method(:await_output) do |master, pattern, message, timeout: 10, initial: ''|
+      collected = initial.dup
       limit = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
       until collected.match?(pattern)
         if Process.clock_gettime(Process::CLOCK_MONOTONIC) > limit
@@ -661,10 +661,43 @@ RSpec.describe Sandbox::InteractiveShell do
       [calls_path, check_path]
     end
 
+    ##
+    # One observation entry for every real-PTY entrypoint example: the exact
+    # banner-then-prompt await pair. Centralizing the pair keeps the assertion
+    # order identical everywhere while the boundary fix lives in this wrapper.
+    define_method(:await_entrypoint_startup) do |master|
+      banner_state = await_output(master, /Trickster Arts Hackers sandbox/, 'entrypoint banner')
+      # Carry the ENTIRE unconsumed tail seen at the first banner match — not
+      # a truncated window — so the prompt observation begins exactly where
+      # the banner observation ended: a merged banner+prompt chunk is no
+      # longer lost, and no byte observed before the banner can re-match
+      # later (order preserved). The tail holds only actual read bytes from
+      # this UTF-8 stream; no synthetic encoding state is injected.
+      banner_match = banner_state.match(/Trickster Arts Hackers sandbox/)
+      await_output(master, /\u25b8 /, 'entrypoint prompt', initial: banner_match.post_match)
+    end
+
+    it 'observes the entrypoint prompt when banner and prompt arrive merged in one chunk' do
+      # Deterministic real-IO regression for the observation boundary: a REAL
+      # pipe holds one prewritten banner+prompt burst and the writer stays
+      # open, so exhausted reads are genuine EAGAIN (WaitReadable), never an
+      # immediate EOFError. Exactly one read_nonblock chunk is deliverable —
+      # the shape where one await consumes bytes the next await needs.
+      burst = "Trickster Arts Hackers sandbox\n \u25b8 "
+      read_end, write_end = IO.pipe
+      write_end.write(burst)
+      begin
+        collected = await_entrypoint_startup(read_end)
+        expect(collected.include?(" \u25b8 ")).to be(true)
+      ensure
+        write_end.close unless write_end.closed?
+        read_end.close unless read_end.closed?
+      end
+    end
+
     it 'runs the real entrypoint on a TTY through the adapter and exits cleanly on EOF' do
       calls_path, check_path = run_with_pty do |master, pid|
-        await_output(master, /Trickster Arts Hackers sandbox/, 'entrypoint banner')
-        await_output(master, /\u25b8 /, 'entrypoint prompt')
+        await_entrypoint_startup(master)
         master.write("\u0004")
         _pid, status = Process.wait2(pid)
         expect(status.exitstatus).to eq(0)
@@ -1201,12 +1234,24 @@ RSpec.describe Sandbox::InteractiveShell do
     end
 
     # One multiplexed wait over the private records pipe AND the PTY master
-    # under the remaining shared deadline: drains actual stdout as
-    # necessary, then returns one readable record. Same-thread IO.select —
+    # under the remaining shared deadline. NORMAL shape (default): drain
+    # the already-readable master bytes first, then return one ready
+    # record — the legacy semantics, with no global drain limit while a
+    # cursor observation runs. INTENT shape (record_first: true, used ONLY
+    # by facade_intent for the producer-frame intent/big-emit windows,
+    # where the intent is written by owner-direct syswrite BEFORE the C
+    # emit): a ready record is consumed BEFORE any stdout drain, and until
+    # the real rendered marker latches at most ONE bounded chunk is
+    # drained per readiness round — so the record wait can never hold a
+    # burst drain that scrolls a just-rendered transient row off the
+    # bounded screen before any screen predicate runs again (only
+    # await_screen evaluates the screen predicate). Once
+    # @frame_marker_latched, bulk drains resume in both shapes.
+    # Same-thread IO.select —
     # deliberately NO background reader thread, because pre-draining
     # everything would kill the real PTY backpressure the gate depends on;
     # the drain happens only while a record wait is actually open.
-    define_method(:await_any_record) do |events, output, screen|
+    define_method(:await_any_record) do |events, output, screen, record_first: false|
       limit = shared_pty_deadline
       loop do
         remaining = limit - Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -1215,7 +1260,15 @@ RSpec.describe Sandbox::InteractiveShell do
         ready = IO.select([events, output], nil, nil, remaining)
         raise 'facade record timeout' unless ready
 
-        drain_stdout(output, screen) if ready[0].include?(output)
+        if record_first && ready[0].include?(events)
+          event = JSON.parse(events.gets || raise('child closed event pipe'))
+          next unless event.is_a?(Hash) && event.key?('f')
+
+          return event['f']
+        end
+
+        drain_stdout(output, screen, max_reads: (record_first && @frame_marker_latched != true) ? 1 : nil) if ready[0].include?(output)
+
         next unless ready[0].include?(events)
 
         event = JSON.parse(events.gets || raise('child closed event pipe'))
@@ -1232,7 +1285,7 @@ RSpec.describe Sandbox::InteractiveShell do
     # on the blocked C write itself.
     define_method(:facade_intent) do |events, output, screen, name|
       loop do
-        item = await_any_record(events, output, screen)
+        item = await_any_record(events, output, screen, record_first: true)
         return item if item.is_a?(Array) && item[0] == 'intent' && item[1] == name
       end
     end
@@ -1337,10 +1390,16 @@ RSpec.describe Sandbox::InteractiveShell do
     MARKER_PHASE_CHUNK = 128
 
     # Drains every immediately-readable stdout byte into the current-screen
-    # model and the actual-bytes counter (never waits inside).
-    define_method(:drain_stdout) do |output, screen|
+    # model and the actual-bytes counter (never waits inside). `max_reads`
+    # caps the drain to that many read rounds for the facade pumps before
+    # the real rendered marker latches; the default stays the unbounded
+    # ready-drain.
+    define_method(:drain_stdout) do |output, screen, max_reads: nil|
       chunk_limit = @frame_marker_latched == true ? 16_384 : MARKER_PHASE_CHUNK
+      reads = 0
       loop do
+        break if max_reads && (reads += 1) > max_reads
+
         chunk = output.read_nonblock(chunk_limit)
         @pty_raw_bytes += chunk.bytesize
         screen.feed(chunk)
@@ -1462,6 +1521,17 @@ RSpec.describe Sandbox::InteractiveShell do
         # the exact cursor — asserted against the drained actual TTY.
         await_screen(output, screen, deadline: 3, message: 'pre-frame settled layout') do |s|
           s.lines.last(settled_rows.length) == settled_rows.map(&:rstrip)
+        end
+        # The settled redisplay crosses the master after its own read
+        # record (owner-thread ordering: record pushed at facade level,
+        # redisplay emitted after read_char returns), so the exact cursor
+        # expect must observe the DRAINED actual cursor: this predicate
+        # reads only the real current terminal bytes until the point-25
+        # cursor shows, bounded by the shared deadline — never a sleep,
+        # never a screen modification, and the exact expect below keeps
+        # its full [10, 5] strength.
+        await_screen(output, screen, deadline: 3, message: 'pre-frame settled cursor') do |s|
+          [s.row, s.column] == [10, 5]
         end
         expect([screen.row, screen.column]).to eq([10, 5])
         expect(screen_text(screen)).not_to include('!')
@@ -1617,6 +1687,77 @@ RSpec.describe Sandbox::InteractiveShell do
         expect(owner['big_emits']).to eq(frame_lines)
         expect(owner['seq_total']).to be > done_state[3]
         expect(event_until(events, 'restored')['restored']).to be(true)
+      end
+    end
+
+    # T4 regression (deterministic, no PTY child): two real IO pipes with
+    # the event JSON and the frame burst prewritten make the
+    # both-streams-ready race permanent instead of scheduler dependent.
+    # The intent record is already readable on the records pipe when the
+    # child's real frame burst is readable on the PTY master, so the
+    # ACTUAL pump (facade_intent -> await_any_record -> drain_stdout)
+    # faces both fds ready on its FIRST select round; the marker capture
+    # itself goes through the ACTUAL await_screen on a real CallbackScreen.
+    it 'protects the rendered frame-start marker while the facade record and the frame burst are both readable' do
+      events_r, events_w = IO.pipe
+      output_r, output_w = IO.pipe
+      begin
+        # Actual private-records wire format from the child: one JSON line,
+        # `f` => ['intent', 'frame-start', owner tid, core seq].
+        fixture_record = { 'f' => ['intent', 'frame-start', 4_242, 7] }
+        # Every 62-char filler line wraps into exactly 3 model rows on the
+        # 24-column screen; 1 + 1 + 20*3 + 1 rows push the marker (>12
+        # rows behind) deterministically off the bounded 12-row screen as
+        # soon as the whole burst has been fed. Prewritten below the pipe
+        # capacity in one write, and writers stay open (closed in ensure)
+        # so exhaustion reads behave like the real EAGAIN, never EOFError.
+        burst = (['frame-start', 'incoming'] +
+                 Array.new(20) { |i| format('filler-%02d %s', i, 'z' * 52) } +
+                 ['frame-done']).join("\n") + "\n"
+        events_w.sync = true
+        events_w.write(JSON.generate(fixture_record) << "\n")
+        output_w.write(burst)
+
+        # Both streams already readable: the exact race shape, verified
+        # before any helper runs.
+        expect(IO.select([events_r, output_r], nil, nil, 0)[0]).to include(events_r, output_r)
+
+        # The shared monotonic deadline the helpers require (normally set
+        # by with_adapter_pty at spawn time) — fresh per example, never
+        # global state.
+        @pty_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10.0
+        @pty_raw_bytes = 0
+        screen = CallbackScreen.new(12, 24, streaming: true)
+
+        obtained = facade_intent(events_r, output_r, screen, 'frame-start')
+        expect(obtained).to eq(fixture_record['f'])
+
+        await_screen(output_r, screen, deadline: 2, message: 'frame-start row') do |s|
+          s.lines.include?('frame-start')
+        end
+
+        # The record was obtained before the marker could be lost, and the
+        # burst crossed in bounded pre-marker chunks only: the design
+        # allows exactly one MARKER_PHASE_CHUNK read, with the rest still
+        # queued behind the real backpressure.
+        expect(@pty_raw_bytes).to eq(MARKER_PHASE_CHUNK)
+        expect(IO.select([output_r], nil, nil, 0)[0]).to include(output_r)
+
+        # The latch set only after the genuine screen predicate captured
+        # the marker (never on a raw drained substring): bulk drain resumes
+        # unchanged and all remaining bytes cross exactly once.
+        @frame_marker_latched = true
+        drain_stdout(output_r, screen)
+        drain_screen(output_r, screen)
+        expect(@pty_raw_bytes).to eq(burst.bytesize)
+        expect(IO.select([output_r], nil, nil, 0)).to be_nil
+
+        # Stream-end validation at the stable declared end: the burst is
+        # plain ASCII ended with a newline, so nothing may remain carried.
+        screen.finish!
+        expect(screen.unknown).to be_empty
+      ensure
+        [events_r, events_w, output_r, output_w].compact.each { |io| io.close unless io.closed? }
       end
     end
 

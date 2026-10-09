@@ -13,6 +13,24 @@ CHAT_TALK_CHAR = "\u2765"
 DEFAULT_CHAT_POLL_INTERVAL = 5
 MIN_CHAT_POLL_INTERVAL = 1
 
+# Bounded transient-network recovery for the chat read poller (user-approved):
+# only these exact wrapped RequestError#type transport class names may be
+# retried, never HTTP/status errors, game exception envelopes, malformed
+# payloads or TLS errors (those stop the poller as before).
+CHAT_READ_TRANSIENT_ERROR_TYPES = %w[
+  Net::OpenTimeout
+  Net::ReadTimeout
+  Net::WriteTimeout
+  Errno::ECONNRESET
+  Errno::ECONNREFUSED
+  Errno::EHOSTUNREACH
+  Errno::ENETUNREACH
+  Errno::ETIMEDOUT
+  EOFError
+  SocketError
+].freeze
+MAX_CHAT_READ_RETRIES = 3
+
 ##
 # Sanitizes untrusted incoming chat text for terminal display: strips ANSI
 # CSI/OSC escape effects and control bytes (which also prevents multiline
@@ -106,19 +124,48 @@ def update_chat_publication_status
   end
 end
 
+##
+# A request error is retriable only when it is a known, intentionally
+# transient transport failure without any HTTP status evidence: session auth
+# and server-side failures always carry other types and must stop the poller.
+def transient_chat_read_error?(error)
+  error.http_status.nil? && CHAT_READ_TRANSIENT_ERROR_TYPES.include?(error.type)
+end
+
 def chat_read(shell, room)
+  transient_read_retries = 0
+
   loop do
     begin
       messages = GAME.chat.read(room)
     rescue Hackers::RequestError => e
-      # Response bodies and exception messages may contain private data.
-      # If output itself fails, the outer ensure still tears down ownership.
-      LOGGER.error("Chat read (#{e.class})")
+      if transient_chat_read_error?(e) && transient_read_retries < MAX_CHAT_READ_RETRIES
+        transient_read_retries += 1
+        # Bounded progress only in waiting state, never a success claim. The
+        # wait must stay outside the registry mutex so close can interrupt it.
+        LOGGER.info("Chat read retry (#{transient_read_retries}/#{MAX_CHAT_READ_RETRIES}) (#{e.class})")
+        sleep(chat_poll_interval)
+        next
+      end
+
+      # Terminal status: named exhaustion for an over-retried transient
+      # failure; the unchanged stop shape for authentication/session and
+      # permanent errors.
+      LOGGER.error(
+        if transient_chat_read_error?(e)
+          "Chat read failed after #{MAX_CHAT_READ_RETRIES} retries (#{e.class})"
+        else
+          "Chat read (#{e.class})"
+        end
+      )
       break
     else
       # The room disappeared from the local bookkeeping: stop instead of
       # spinning or crashing the poll thread.
       break if messages.nil?
+
+      # Only a valid successful read re-arms the retry budget.
+      transient_read_retries = 0
 
       chat_log(shell, room, messages)
     end

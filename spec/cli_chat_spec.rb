@@ -506,5 +506,242 @@ RSpec.describe 'CLI chat context' do
       expect(GAME.chat).not_to be_opened(999)
       expect(CHAT_ROOMS).to be_empty
     end
+
+    describe 'bounded transient read recovery' do
+      before do
+        allow(GAME.app_settings).to receive(:loaded?).and_return(true)
+        allow(GAME.app_settings).to receive(:get).with('chat_refresh_interval').and_return(1)
+      end
+
+      # Same shape as the poller helpers above, scoped to this nested group.
+      def recovery_worker(output)
+        gate = Queue.new
+        worker = Thread.new do
+          Thread.current.report_on_exception = false
+          gate.pop
+          chat_read(output, 999)
+        end
+        (@recovery_workers ||= []) << worker
+        GAME.chat.open(999)
+        CHAT_ROOMS[999] = worker
+        gate << true
+        worker
+      end
+
+      def await_recovery_worker(worker, cap = 12)
+        expect(worker.join(cap)).to equal(worker)
+        worker
+      end
+
+      after do
+        (@recovery_workers || []).each do |worker|
+          worker.kill if worker.alive?
+          worker.join(8)
+        end
+      end
+
+      it 'recovers a first transient transport failure, keeping the room and the cursor' do
+        error_base = LOGGER.error_count
+        # Method-level guards beyond the transport key-shape lens: recovery must
+        # rely on the existing session only — no re-authentication, no resend.
+        expect(GAME).to receive(:auth).never
+        expect(GAME).to receive(:auth_minimal).never
+        expect(GAME.chat).to receive(:write).never
+        expect(GAME.api).to receive(:write_chat).never
+        requests = []
+        # Real dataset bookkeeping is exercised: only the transport is replaced,
+        # so any room recreation or cursor reset is observable here.
+        allow(GAME.api.client).to receive(:request_raw) do |params, *|
+          requests << params.dup
+          if requests.length == 1
+            raise Hackers::RequestError.new('Net::ReadTimeout', 'synthetic timeout')
+          else
+            CHAT_PAYLOAD
+          end
+        end
+        rendered = Queue.new
+        output = double('output')
+        allow(output).to receive(:puts) { |line| rendered << line }
+        worker = recovery_worker(output)
+
+        post_recovery_line = Timeout.timeout(8) { rendered.pop }
+        expect(post_recovery_line).to include('TestHero')
+        # One more cadence read proves the cursor moved only via the successful
+        # parse; the same room entry advanced it ('' through the failing and
+        # retry reads, '1000' after), so neither cursor reset nor room
+        # recreation occurred.
+        Timeout.timeout(8) { nil until requests.length >= 3 }
+        worker.kill
+        expect(worker.join(8)).to equal(worker)
+
+        expect(requests.map(&:keys).uniq)
+          .to eq([%w[chat_display room last_message app_version session_id cmd_id]])
+        expect(requests[0]['last_message']).to be_empty
+        expect(requests[1]['last_message']).to be_empty
+        expect(requests[2]['last_message']).to eq('1000')
+        expect(SHELL_OUTPUT.string).to include('Chat read retry (1/3) (Hackers::RequestError)')
+        expect(SHELL_OUTPUT.string.scan(/Chat read retry \(\d\/3\)/).length).to eq(1)
+        expect(LOGGER.error_count).to eq(error_base)
+      end
+
+      it 'stops with an exhausted retry budget after exactly four read attempts' do
+        error_base = LOGGER.error_count
+        allow(GAME.chat).to receive(:read).with(999) do
+          raise Hackers::RequestError.new('Net::ReadTimeout', 'synthetic timeout')
+        end
+        worker = recovery_worker(SHELL)
+
+        await_recovery_worker(worker)
+        expect(GAME.chat).to have_received(:read).with(999).exactly(4).times
+        expect(SHELL_OUTPUT.string.scan(/Chat read retry/).length).to eq(3)
+        expect(SHELL_OUTPUT.string).to include('Chat read failed after 3 retries (Hackers::RequestError)')
+        expect(SHELL_OUTPUT.string).not_to include('Chat read retry (4/')
+        expect(LOGGER.error_count).to eq(error_base + 1)
+        expect(CHAT_ROOMS).not_to have_key(999)
+        expect(GAME.chat).not_to be_opened(999)
+      end
+
+      it 'resets the retry budget after a valid empty read' do
+        error_base = LOGGER.error_count
+        calls = 0
+        allow(GAME.chat).to receive(:read).with(999) do
+          calls += 1
+          case calls
+          when 1 then raise Hackers::RequestError.new('Errno::ECONNRESET', 'synthetic reset')
+          when 2 then []
+          else raise Hackers::RequestError.new('Net::OpenTimeout', 'synthetic timeout')
+          end
+        end
+        worker = recovery_worker(SHELL)
+
+        await_recovery_worker(worker, 15)
+        expect(GAME.chat).to have_received(:read).with(999).exactly(6).times
+        expect(SHELL_OUTPUT.string.scan(/Chat read retry/).length).to eq(4)
+        expect(SHELL_OUTPUT.string).to include('Chat read failed after 3 retries (Hackers::RequestError)')
+        expect(LOGGER.error_count).to eq(error_base + 1)
+        expect(CHAT_ROOMS).not_to have_key(999)
+        expect(GAME.chat).not_to be_opened(999)
+      end
+
+      [
+        Hackers::RequestError.new('HTTP', 'synthetic body', http_status: 500),
+        Hackers::RequestError.new('Exception', nil),
+        Hackers::RequestError.new('Chat response malformed', nil),
+        Hackers::RequestError.new('OpenSSL::SSL::SSLError', 'synthetic ssl')
+      ].each do |error|
+        it "stops immediately on a non-retryable #{error.type} failure" do
+          allow(GAME.chat).to receive(:read).with(999).and_raise(error)
+          await_recovery_worker(recovery_worker(SHELL), 12)
+
+          expect(GAME.chat).to have_received(:read).with(999).exactly(1).times
+          expect(SHELL_OUTPUT.string).not_to include('Chat read retry')
+          expect(SHELL_OUTPUT.string).to include('Chat read (Hackers::RequestError)')
+          expect(CHAT_ROOMS).not_to have_key(999)
+          expect(GAME.chat).not_to be_opened(999)
+        end
+      end
+
+      it 'interrupts a waiting recovery when the room is closed' do
+        rendered = Queue.new
+        output = double('output')
+        allow(output).to receive(:puts) { |line| rendered << line }
+        calls = 0
+        message = Hackers::Serializer::Chat::Data.new('1000', 'Synthetic', 'hello', 55, 60, 3, 999)
+        allow(GAME.chat).to receive(:read).with(999) do
+          calls += 1
+          case calls
+          when 1 then raise Hackers::RequestError.new('Net::ReadTimeout', 'synthetic timeout')
+          when 2 then [message]
+          else nil
+          end
+        end
+        worker = recovery_worker(output)
+
+        rendered_line = Timeout.timeout(8) { rendered.pop }
+        run_chat(:close, '999')
+        expect(worker.join(8)).to equal(worker)
+        expect(CHAT_ROOMS).not_to have_key(999)
+        expect(GAME.chat).not_to be_opened(999)
+        expect(SHELL_OUTPUT.string).to include('Chat read retry (1/3) (Hackers::RequestError)')
+        expect(rendered_line).to include('Synthetic')
+      end
+
+      it 'keeps sibling room polling isolated from a recovery teardown' do
+        message = Hackers::Serializer::Chat::Data.new('1000', 'Synthetic', 'hello', 55, 60, 3, 777)
+        allow(GAME.chat).to receive(:read).and_return([message])
+        allow(GAME.chat).to receive(:read).with(999)
+          .and_raise(Hackers::RequestError.new('EOFError', 'synthetic eof'))
+        worker_a = recovery_worker(SHELL)
+        expect(GAME.chat).to be_opened(999)
+        rendered_b = Queue.new
+        output_b = double('output')
+        allow(output_b).to receive(:puts) { |line| rendered_b << line }
+        gate_b = Queue.new
+        worker_b = Thread.new do
+          Thread.current.report_on_exception = false
+          gate_b.pop
+          chat_read(output_b, 777)
+        end
+        (@recovery_workers ||= []) << worker_b
+        GAME.chat.open(777)
+        CHAT_ROOMS[777] = worker_b
+        gate_b << true
+        Timeout.timeout(8) { rendered_b.pop }
+
+        run_chat(:close, '999')
+        expect(worker_a.join(12)).to equal(worker_a)
+        expect(CHAT_ROOMS[777]).to equal(worker_b)
+        expect(GAME.chat).to be_opened(777)
+        run_chat(:close, '777')
+        expect(worker_b.join(8)).to equal(worker_b)
+        expect(CHAT_ROOMS).to be_empty
+        expect(GAME.chat).not_to be_opened(777)
+      end
+
+      it 'recovers without any authentication or send side effects' do
+        # Planned row (v), explicit method-level spies (never-throws semantics):
+        # the retry→success path must reuse the existing session, never call
+        # auth/auth_minimal and never touch the write path.
+        expect(GAME).to receive(:auth).never
+        expect(GAME).to receive(:auth_minimal).never
+        expect(GAME.chat).to receive(:write).never
+        expect(GAME.api).to receive(:write_chat).never
+        requests = []
+        allow(GAME.api.client).to receive(:request_raw) do |params, *|
+          requests << params.dup
+          raise Hackers::RequestError.new('Net::WriteTimeout', 'synthetic timeout') if requests.length == 1
+
+          CHAT_PAYLOAD
+        end
+        rendered = Queue.new
+        output = double('output')
+        allow(output).to receive(:puts) { |line| rendered << line }
+        worker = recovery_worker(output)
+
+        # The retry actually executes before the asserted success render and
+        # the transport call count is 2+ (1 failed attempt then retried reads).
+        expect(Timeout.timeout(8) { rendered.pop }).to include('TestHero')
+        expect(requests.length).to be >= 2
+        # Recorded transport keys identify chat reads only.
+        expect(requests[0, 2].map(&:keys).uniq)
+          .to eq([%w[chat_display room last_message app_version session_id cmd_id]])
+        expect(requests[0]['last_message']).to be_empty
+        expect(requests[1]['last_message']).to be_empty
+        worker.kill
+        expect(worker.join(8)).to equal(worker)
+      end
+
+      it 'classifies all ten allowlisted transport types as retryable and status-bearing errors as terminal' do
+        CHAT_READ_TRANSIENT_ERROR_TYPES.each do |type|
+          expect(transient_chat_read_error?(Hackers::RequestError.new(type, 'probe'))).to be(true)
+        end
+        # Positive HTTP status is never retriable, regardless of body.
+        expect(transient_chat_read_error?(Hackers::RequestError.new('HTTP', 'probe', http_status: 500))).to be(false)
+        # Session/auth, TLS and malformed-payload shapes stop the poller.
+        expect(transient_chat_read_error?(Hackers::RequestError.new('Exception', nil))).to be(false)
+        expect(transient_chat_read_error?(Hackers::RequestError.new('OpenSSL::SSL::SSLError', 'probe'))).to be(false)
+        expect(transient_chat_read_error?(Hackers::RequestError.new('Chat response malformed', nil))).to be(false)
+      end
+    end
   end
 end
