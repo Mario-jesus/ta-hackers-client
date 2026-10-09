@@ -1,5 +1,8 @@
 # Task: Chat poll bounded transient-network read recovery
 
+- **Local unit closed:** `7faa6363d7b3df3f6155fb0178a7d4dd7199cbfe` (`feat(chat): recover bounded transient read polling failures`), exactly the four approved paths. Final parent acceptance before commit: **135 examples, 0 failures (18.71 s)**; no mutating hooks ran. The approved size exception covered 651 insertions and 14 deletions.
+- Delivery remains local: no push, no native approval. Live backend validation, Actions and the full suite remain unrun; private configuration and unrelated changes were excluded. Pending-commit descriptions below are preserved pre-closure snapshots and are superseded by this record.
+
 - **Current functional status:** writer acceptance **135/0 (18.65 s)** and independent acceptance **135/0 (18.63 s)**, with no skips. T5 reproduced the empty-prompt failure deterministically and carries the genuine post-banner bytes into the prompt observation; production startup and every real-TTY assertion remain unchanged.
 - The earlier PARTIAL closure entries below are historical checkpoints. Final parent verification and the approved four-file local commit remain pending; the size exception does not authorize a push or create native review approval.
 
