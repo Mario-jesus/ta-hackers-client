@@ -20,6 +20,18 @@ log attribution. Structural ParserError failures propagate. Neither route adds
 retries, clears a previous session on failure, or introduces a universal readiness
 state. Full connect does not itself load every player network or world dataset.
 
+## Autohack usage (offline-verified script contract only)
+
+```
+run autohack [--coffers 0..100] [--timing conservative|fast|MIN..MAX] <count>
+```
+
+Defaults: coffers 5 (integer floor percentage of the attacked target's
+validated coffers, computed per currency with no compounding), timing
+conservative 420..950 (`fast` = 15..25; a custom `MIN..MAX` needs a positive
+minimum) and a positive-integer count. Target id 127 is skipped and each
+target id is attempted at most once per run.
+
 ## Representative prerequisites (static inspection only)
 
 | Public source | State assumed beyond a session | Additional work in the script |
@@ -27,6 +39,7 @@ state. Full connect does not itself load every player network or world dataset.
 | `scripts/fingoals.rb` | Goal types catalog for amounts and credits | Loads world goals, then calls goal updates repeatedly |
 | `scripts/missions.rb` | Missions list catalog for mission names; player ID argument | Loads that player's mission log for display |
 | `scripts/colres.rb` | Node types catalog for production limits, speeds and currencies | Loads player network/profile, then collects eligible production nodes repeatedly |
+| `scripts/autohack.rb` | Own player country; app settings `node types`/`program types` values (runtime-validated; the exact key strings remain unverified); loaded world targets | Bounded attack run over listed targets: one zero-loot update, one final fight at the configured coffers percentage, then a network leave; blank protocol versions are refused |
 
 `lib/cli/context/script.rb` dispatches scripts with GAME, shell, logger and
 arguments; `lib/cli/sandbox.rb` stores these references. Neither initializes the
@@ -40,8 +53,12 @@ Offline specs invoke only the registered connect command with fake game/dataset,
 logger and shell state. They cover exact ordering, minimal isolation, bootstrap,
 auth and post-auth short-circuits, and structural failure propagation. Full-auth
 specs retain valid decoding and reject nil/empty SIDs before state setters.
-No representative script was executed, and no gameplay mutation or backend
-publication was validated. `autohack` is excluded, not declared ready.
+No representative script was executed against a live backend, and no gameplay
+mutation or backend publication was validated. `autohack` now carries the
+offline contract tests of this repair (restored `attack_net` parse plus strict
+script stages), yet its live backend behavior, the exact AppSettings key
+strings and loot application remain unverified; it is not declared
+battle-ready and no victory is claimed.
 
 Base64 already has explicit requires in `lib/hackers/client.rb` and
 `lib/cli/context/query.rb`; no demonstrated missing require warrants dependency

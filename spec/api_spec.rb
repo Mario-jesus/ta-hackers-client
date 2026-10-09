@@ -5,6 +5,7 @@ require 'uri'
 require 'digest'
 require 'base64'
 
+require 'hackers/serializer'
 require 'hackers/api'
 require 'hackers/client'
 require 'hackers/exceptions'
@@ -342,6 +343,116 @@ RSpec.describe Hackers::API do
     it 'sends the session id before the command hash' do
       keys = requests.first.keys
       expect(keys.index('session_id')).to be < keys.index('cmd_id')
+    end
+  end
+
+  ##
+  # Restores the documented net_get_for_attack parse contract (serializer
+  # commit 9eb0951, #parseNetGetForAttack): nodes at section 0, net at
+  # section 1 (net string at 1,0,1), profile at (2,0), readme at (4,0).
+  # The synthetic wire fixtures below follow that PUBLIC serializer layout
+  # with dummy tokens only; no private captures and no server contact.
+  describe 'attack_net parse contract' do
+    ATTACK_NET_FIXTURE = [
+      '101,3;102,7',
+      'A,NET-DATA,B;keep',
+      '777001,DummyTarget,1001,2468,12,300,fill,fill,fill,21,3,15,25,4,9',
+      'unused',
+      'readme text'
+    ].join('@')
+
+    before do
+      api.id = DUMMY_ID
+      api.sid = DUMMY_SID
+      allow(api.client).to receive(:request_raw) do |params, **_kwargs|
+        requests << params.dup
+        ATTACK_NET_FIXTURE
+      end
+    end
+
+    it 'sends the sessioned net_get_for_attack wire and rebuilds the documented hash' do
+      result = api.attack_net(111)
+
+      expect(requests.first.keys).to eq(
+        ['net_get_for_attack', 'id_target', 'id_attacker', 'app_version', 'session_id', 'cmd_id']
+      )
+      expect(requests.first['id_target']).to eq(111)
+      expect(requests.first['id_attacker']).to eq(DUMMY_ID)
+
+      expect(result.keys).to eq(%w[nodes net profile readme])
+      expect(result['nodes']).to eq([%w[101 3], %w[102 7]])
+      expect(result['net']).to eq([%w[A NET-DATA B], %w[keep]])
+      expect(result['readme']).to eq([['readme text']])
+
+      profile = result['profile']
+      expect(profile).to be_a(Hackers::Serializer::Profile::Data)
+      expect(profile.id).to eq(777_001)
+      expect(profile.name).to eq('DummyTarget')
+      expect(profile.money).to eq(1001)
+      expect(profile.bitcoins).to eq(2468)
+    end
+
+    it 'raises ParserError before any coffer math when the profile section is missing' do
+      allow(api.client).to receive(:request_raw) do |params, **_kwargs|
+        requests << params.dup
+        '101,3@A,NET-DATA,B'
+      end
+
+      expect { api.attack_net(111) }.to raise_error(Hackers::Serializer::ParserError)
+    end
+
+    it 'rejects a malformed money value instead of letting .to_i invent a valid amount' do
+      truncated = ATTACK_NET_FIXTURE
+      allow(api.client).to receive(:request_raw) do |params, **_kwargs|
+        requests << params.dup
+        truncated.gsub(',1001,', ',1x5,')
+      end
+
+      # '1x5'.to_i is '1' — silently "valid" — so the raw field must fail.
+      expect { api.attack_net(111) }.to raise_error(Hackers::Serializer::ParserError)
+    end
+
+    it 'rejects negative currencies as non-nonnegative integers' do
+      allow(api.client).to receive(:request_raw) do |params, **_kwargs|
+        requests << params.dup
+        ATTACK_NET_FIXTURE.gsub(',2468,', ',-5,')
+      end
+
+      expect { api.attack_net(111) }.to raise_error(Hackers::Serializer::ParserError)
+    end
+
+    it 'keeps zero resources valid' do
+      allow(api.client).to receive(:request_raw) do |params, **_kwargs|
+        requests << params.dup
+        ATTACK_NET_FIXTURE.gsub(',1001,2468,', ',0,0,')
+      end
+
+      profile = api.attack_net(111)['profile']
+      expect(profile.money).to eq(0)
+      expect(profile.bitcoins).to eq(0)
+    end
+  end
+
+  describe 'instance version accessor compatibility' do
+    it 'reads the per-instance configured version, not the default constant' do
+      synthetic = Hackers::API.new(version: 2222)
+
+      expect(synthetic.version).to eq(2222)
+      expect(Hackers::API::VERSION).to eq(NATIVE_VERSION)
+    end
+
+    it 'carries the instance version with the public setter set to 2222 on actual request params' do
+      synthetic = Hackers::API.new
+      allow(synthetic.client).to receive(:request_raw) do |params, **_kwargs|
+        requests << params.dup
+        '1'
+      end
+
+      synthetic.version = 2222
+      synthetic.app_settings
+
+      expect(synthetic.version).to eq(2222)
+      expect(requests.first['app_version']).to eq(2222)
     end
   end
 end
