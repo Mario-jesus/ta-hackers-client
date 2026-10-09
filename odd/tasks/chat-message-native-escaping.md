@@ -1,5 +1,11 @@
 # Native-escape the chat message field before URI signing
 
+## Current delivery status
+
+- Source, regressions, diagnostics documentation, and this tracker were committed as `e84396e2c61287dc5c24ffb9f7d46d085599ed5a` (`fix(chat): preserve compatible punctuation before request signing`). This commit closes the implemented W1/W3/W4 source units; W5 supplies their complete-original live acceptance evidence. W2 remains a historical failed attempt, superseded by W5, not an outstanding send blocker.
+- The user explicitly approved a single coherent size-exception delivery without native review. No native approval is claimed; the separate SDK PTY/full-suite item remains outside this verified send fix.
+- Earlier pending/uncommitted descriptions below are preserved pre-delivery snapshots and are superseded by this current status. The authorized destination is the personal `backup` remote, branch `fix/cli-chat-working`; remote push evidence is recorded separately after confirmed success.
+
 ## Objective and authorization
 
 The official 1.229 chat builder pre-escapes the chat message with .NET `Uri.EscapeDataString` before the URI is canonicalized and checksummed. This client instead form-encodes the whole query and then globally unescapes colons. The divergence this created was byte-level in the signed wire URI only: for messages containing colons the signed URI emitted raw `:` where native emits `%3A`, and `*` stayed raw where native emits `%2A`; both encodings decode back to identical message text, so no decoded message text was corrupted. The bounded authorized fix makes the chat message field use a native-equivalent RFC 3986 data escape while every other chat field and all non-chat requests keep their existing safe behavior. This aligns the outgoing URI with the observed native flow, but does not prove or claim a server-side root cause for the user's send 500.
