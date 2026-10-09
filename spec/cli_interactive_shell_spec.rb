@@ -135,6 +135,50 @@ class FakeNativeModule
 end
 
 RSpec.describe Sandbox::InteractiveShell do
+  # --- Shared PTY child bookkeeping (T1 hoist) -------------------------------
+  # Scoped to this example tree only: both the bin/sandbox entrypoint group
+  # and the real-PTY-proof group record the pids of children THEY spawned and
+  # reap them under bounded deadlines. No helper leaves this spec file.
+  ##
+  # Runtime-only child registration (not a repository source): when the
+  # parent provides CLI_STRICT_PTY_PID_FILE (an exact locator under the
+  # ignored run directory) plus a fresh opaque CLI_STRICT_PTY_RUN_NONCE,
+  # every PTY child this harness spawned is appended as one JSONL line
+  # (kind/pid/parent pid/nonce/monotonic only — no source bytes, no
+  # secrets) so the parent can reap a child whose runner was externally
+  # killed before the Ruby ensure ran. The harness records and later kills
+  # ONLY pids it spawned itself; no ambient process discovery and no
+  # cmdline reading. Fail-closed when the env path is set but unusable.
+  define_method(:record_pty_manifest) do |kind, pid, mono|
+    path = ENV['CLI_STRICT_PTY_PID_FILE']
+    return if path.nil? || path.empty?
+
+    nonce = ENV['CLI_STRICT_PTY_RUN_NONCE']
+    raise 'CLI_STRICT_PTY_PID_FILE is set without CLI_STRICT_PTY_RUN_NONCE' if nonce.nil? || nonce.empty?
+
+    File.open(path, 'a') do |file|
+      file.puts(JSON.generate('kind' => kind, 'pid' => pid, 'parent_pid' => Process.pid,
+                              'nonce' => nonce, 'mono' => mono))
+      file.flush
+    end
+  end
+
+  # Bounded nonblocking reap: polls WNOHANG until the limit. Returns the
+  # exit status, or nil when the process did not terminate in time (best
+  # effort inside ensure paths; the caller decides whether nil is fatal).
+  define_method(:wait_child_bounded) do |pid, limit|
+    loop do
+      _pid, status = Process.waitpid2(pid, Process::WNOHANG)
+      return status if status
+
+      return nil if Process.clock_gettime(Process::CLOCK_MONOTONIC) > limit
+
+      sleep 0.01
+    end
+  rescue Errno::ECHILD
+    nil
+  end
+
   describe 'fail-closed native selection' do
     it 'fails closed with an actionable build message when the artifact is missing' do
       stub_const('Sandbox::InteractiveShell::NATIVE_ARTIFACT', '/nonexistent/' + NATIVE_ARTIFACT_NAME)
@@ -1053,46 +1097,6 @@ RSpec.describe Sandbox::InteractiveShell do
       event(events, written: GAME.chat.written) if mode == 'surface'
     RUBY
 
-    ##
-    # Runtime-only child registration (not a repository source): when the
-    # parent provides CLI_STRICT_PTY_PID_FILE (an exact locator under the
-    # ignored run directory) plus a fresh opaque CLI_STRICT_PTY_RUN_NONCE,
-    # every PTY child this harness spawned is appended as one JSONL line
-    # (kind/pid/parent pid/nonce/monotonic only — no source bytes, no
-    # secrets) so the parent can reap a child whose runner was externally
-    # killed before the Ruby ensure ran. The harness records and later kills
-    # ONLY pids it spawned itself; no ambient process discovery and no
-    # cmdline reading. Fail-closed when the env path is set but unusable.
-    define_method(:record_pty_manifest) do |kind, pid, mono|
-      path = ENV['CLI_STRICT_PTY_PID_FILE']
-      return if path.nil? || path.empty?
-
-      nonce = ENV['CLI_STRICT_PTY_RUN_NONCE']
-      raise 'CLI_STRICT_PTY_PID_FILE is set without CLI_STRICT_PTY_RUN_NONCE' if nonce.nil? || nonce.empty?
-
-      File.open(path, 'a') do |file|
-        file.puts(JSON.generate('kind' => kind, 'pid' => pid, 'parent_pid' => Process.pid,
-                                'nonce' => nonce, 'mono' => mono))
-        file.flush
-      end
-    end
-
-    # Bounded nonblocking reap: polls WNOHANG until the limit. Returns the
-    # exit status, or nil when the process did not terminate in time (best
-    # effort inside ensure paths; the caller decides whether nil is fatal).
-    define_method(:wait_child_bounded) do |pid, limit|
-      loop do
-        _pid, status = Process.waitpid2(pid, Process::WNOHANG)
-        return status if status
-
-        return nil if Process.clock_gettime(Process::CLOCK_MONOTONIC) > limit
-
-        sleep 0.01
-      end
-    rescue Errno::ECHILD
-      nil
-    end
-
     # Fully bounded child termination: the caller closes the PTY master and
     # auxiliary pipes first so the child cannot block forever on its
     # streams; then TERM, a <=0.3s WNOHANG wait, KILL plus a bounded reap.
@@ -1323,11 +1327,21 @@ RSpec.describe Sandbox::InteractiveShell do
       end
     end
 
+    # Deterministic read granularity for the screen-flow phase: a 128-byte
+    # read can shift at most ~6 model rows (plus the two redraw rows an
+    # emit burst appends), so a row rendered just ahead of the read stays
+    # inside the bounded 12-row window at the next predicate check. This
+    # is arithmetic on the read bound, never a timing heuristic. Used by
+    # BOTH master drains (drain_stdout for the facade pumps and
+    # await_screen) until the frame marker latches, then bulk reads resume.
+    MARKER_PHASE_CHUNK = 128
+
     # Drains every immediately-readable stdout byte into the current-screen
     # model and the actual-bytes counter (never waits inside).
     define_method(:drain_stdout) do |output, screen|
+      chunk_limit = @frame_marker_latched == true ? 16_384 : MARKER_PHASE_CHUNK
       loop do
-        chunk = output.read_nonblock(16_384)
+        chunk = output.read_nonblock(chunk_limit)
         @pty_raw_bytes += chunk.bytesize
         screen.feed(chunk)
       end
@@ -1355,6 +1369,14 @@ RSpec.describe Sandbox::InteractiveShell do
     # bounded by a wall-clock deadline under the shared PTY deadline so
     # every PTY gate stays deterministic. Tracks the actual bytes drained
     # from the master for the frame backpressure arithmetic.
+    #
+    # T3 marker observation: until the frame marker latches, reads stay at
+    # MARKER_PHASE_CHUNK bytes so a just-rendered transient row (e.g.
+    # frame-start) is still on the bounded screen when the predicate is
+    # checked; the facade-intent pump (drain_stdout) obeys the same bound.
+    # Once @frame_marker_latched, bulk reads resume. Read granularity
+    # only — no sleep/poll of the native side, no timing heuristic, and no
+    # assertion text is weakened anywhere.
     define_method(:await_screen) do |output, screen, deadline:, message:, &predicate|
       limit = [shared_pty_deadline, Process.clock_gettime(Process::CLOCK_MONOTONIC) + deadline].min
       raw = +''
@@ -1366,7 +1388,9 @@ RSpec.describe Sandbox::InteractiveShell do
         next unless IO.select([output], nil, nil, 0.05)
 
         begin
-          chunk = output.read_nonblock(16_384)
+          chunk = output.read_nonblock(
+            @frame_marker_latched == true ? 16_384 : MARKER_PHASE_CHUNK
+          )
           raw << chunk
           @pty_raw_bytes += chunk.bytesize
           screen.feed(chunk)
@@ -1460,6 +1484,14 @@ RSpec.describe Sandbox::InteractiveShell do
         await_screen(output, screen, deadline: 5, message: 'frame-start row') do |s|
           s.lines.include?('frame-start')
         end
+        # Marker captured through the bounded read phase: the observed row
+        # is the marker TEXT on the live current-screen model, and the rest
+        # of the frame is still queued behind the real backpressure — the
+        # read side has NOT drained the whole frame. Bulk reads resume only
+        # now (for the later window/redraw await phases), BEFORE the
+        # deferred key is queued, so the causal mid-frame key ordering and
+        # the drained-bytes inequality below stay exactly as written.
+        @frame_marker_latched = true
 
         # PHASE CORRECTION (honest disclosure): the immediately previous
         # round asserted the full exact input layout MID-frame, but the
@@ -1540,12 +1572,22 @@ RSpec.describe Sandbox::InteractiveShell do
         end
         expect([screen.row, screen.column]).to eq([10, 6])
 
-        # Submit: the SDK dispatch shows the exact submitted text back
-        # (unrecognized at root, wrapped across rows); the submitted read
-        # record is the second, independent exactness proof.
+        # Submit: the SDK dispatch echoes the unrecognized token (wrapped
+        # across rows); the submitted read record is the second, independent
+        # exactness proof.
         input.write("\r")
+        # Parity-echo correction (accepted 2026-10): the SDK downcases the
+        # first token IN PLACE before any echo — verbatim on-disk sources
+        # read directly (external gem, not CodeGraph-indexed):
+        #   .bundle/native-readline/ruby/3.3.0/gems/sandbox-ruby-0.1/lib/
+        #     sandbox/shell.rb:185  "tokens.first&.downcase!" (split_tokens)
+        #   .../sandbox/context.rb:102 and :125 —
+        #     'shell.puts("Unrecognized command: #{tokens.first}")'
+        # The submitted line is a single whitespace-free command token, so
+        # the echo is its full downcase; the DIFFERENT-CASE identity proof
+        # stays in the read-record assertions below (submitted_record).
         await_screen(output, screen, deadline: 5, message: 'submitted dispatch row') do |s|
-          screen_text(s).include?("Unrecognized command: #{submitted_text}")
+          screen_text(s).include?("Unrecognized command: #{submitted_text.downcase}")
         end
         submitted_record = nil
         loop do
@@ -1802,10 +1844,16 @@ RSpec.describe CallbackScreen do
       screen = streaming_screen
       raw = '/ ▸ x'.b
       screen.feed(raw[0, 3]) # '/ ' + the '▸' lead \xE2
-      expect(screen.lines.first).to eq('/ ')
+      # T2 (accepted rationale): `lines` is the normalized ROW presentation
+      # (trailing blanks trimmed), so an open row holding '/ ' plus a still
+      # pending glyph reads as '/'. The SPACE itself is proven consumed as a
+      # real cell by the independent cursor position assertions below:
+      # column 2 with the glyph deferred until completion — a swallowed byte
+      # or non-advanced column could not produce [row, column] == [0, 2].
+      expect(screen.lines.first).to eq('/')
       expect([screen.row, screen.column]).to eq([0, 2])
       screen.feed(raw[3, 1]) # the \x96 continuation, still incomplete
-      expect(screen.lines.first).to eq('/ ')
+      expect(screen.lines.first).to eq('/')
       expect([screen.row, screen.column]).to eq([0, 2])
       screen.feed(raw[4..]) # \xB8 completes '▸', then ' x'
       expect(screen.lines.first).to eq('/ ▸ x')
@@ -1831,7 +1879,9 @@ RSpec.describe CallbackScreen do
       raw = '/ ▸ y'.b
       screen.feed(raw[0, 3])
       screen.feed(''.b) # empty read: restore, still incomplete, re-carry
-      expect(screen.lines.first).to eq('/ ')
+      # Normalized presentation again; see the first streaming example for
+      # the full accepted rationale — the cursor pair proves the space.
+      expect(screen.lines.first).to eq('/')
       expect([screen.row, screen.column]).to eq([0, 2])
       screen.feed(raw[3..])
       expect(screen.lines.first).to eq('/ ▸ y')
