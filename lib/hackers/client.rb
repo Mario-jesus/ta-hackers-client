@@ -65,8 +65,7 @@ module Hackers
     ##
     # Generates a raw URI
     def generate_uri_raw(params)
-      query = URI.encode_www_form(params)
-      query = canonical_chat_query(query) if chat_request?(params)
+      query = chat_request?(params) ? canonical_chat_query(params) : URI.encode_www_form(params)
       "#{@path}?#{query}"
     end
 
@@ -125,10 +124,69 @@ module Hackers
 
     ##
     # Chat requests must match the native .NET Uri.AbsoluteUri form before the
-    # checksum is computed: form-encode safely first, then expose only the
-    # observed safe subset of space and colon differences.
-    def canonical_chat_query(query)
-      query.gsub('+', '%20').gsub(/%3A/i, ':')
+    # checksum is computed. The native chatSend builder pre-escapes the message
+    # with Uri.EscapeDataString, and controlled same-account backend evidence
+    # requires the final signed wire bytes of the message field to expose a
+    # literal `!` and `*` (see canonical_chat_message). Message colons stay
+    # %3A; all other punctuation stays escaped. Every other field keeps the
+    # previously verified safe subset: form encoding plus the space and colon
+    # canonicalization observed in Uri.AbsoluteUri, which leaves last_message
+    # colons raw.
+    def canonical_chat_query(params)
+      params.map { |key, value| canonical_chat_param(key, value) }.join('&')
+    end
+
+    ##
+    # Builds one chat query pair in its field-specific canonical form
+    def canonical_chat_param(key, value)
+      name = URI.encode_www_form_component(key)
+      return name if value.nil?
+
+      value = key == 'message' ? canonical_chat_message(value) : canonical_chat_value(value)
+      "#{name}=#{value}"
+    end
+
+    ##
+    # Keeps the form-encoding plus observed safe subset for non-message fields
+    def canonical_chat_value(value)
+      URI.encode_www_form_component(value).gsub('+', '%20').gsub(/%3A/i, ':')
+    end
+
+    ##
+    # Escapes one chat message with the native Uri.EscapeDataString contract:
+    # RFC 3986 unreserved characters stay literal and every other character
+    # becomes uppercase UTF-8 percent encoding. Applied exactly once; never
+    # re-form-escaped afterwards.
+    def escape_chat_message(value)
+      value.to_s.gsub(/[^A-Za-z0-9\-._~]/) do |char|
+        char.unpack('C*').map { |byte| format('%%%02X', byte) }.join
+      end
+    end
+
+    ##
+    # Final canonical form of one chat message: the RFC 3986 escape stage stays
+    # intact, then the backend-compatible wire normalization below adjusts only
+    # the message field before the checksum, identically on both hash passes.
+    def canonical_chat_message(value)
+      expose_chat_message_punctuation(escape_chat_message(value))
+    end
+
+    ##
+    # Backend-compatible normalization of the final signed wire bytes:
+    # controlled same-account backend evidence showed percent-bang and
+    # percent-asterisk message values rejected with an empty 5-class send
+    # response while the identical decoded texts published through the same
+    # guarded path when the wire form carried a literal `!` or `*`. The
+    # message field therefore exposes literal `!` and `*` in the wire URI as
+    # an explicit two-token mapping. Modern .NET 8 Uri canonicalization does
+    # not perform this exposure, so this is a backend-compatible
+    # normalization, not a claimed byte-equality with the unknown native
+    # final canonicalization. The mapping is intentionally not generic:
+    # percent escapes of these characters themselves stay escaped, so a
+    # literal user `%2A` or `%21` string (escaped as `%252A`/`%2521`) is
+    # preserved, and separator characters like `? & = # / + %` remain escaped.
+    def expose_chat_message_punctuation(escaped)
+      escaped.gsub(/%21|%2A/, '%21' => '!', '%2A' => '*')
     end
 
     ##
