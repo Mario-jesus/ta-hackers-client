@@ -1,5 +1,8 @@
 # Autohack functional repair — preparation (docs-only gate)
 
+- **Local implementation closed:** `4cec8b5af6b8706c71de56fc59eb6f1e7c31f7f8` (`feat(autohack): restore bounded configurable script`), exactly the six authorized files. Final parent offline check before commit: **1130 examples, 0 failures (34.6 s)**; the private-config case was excluded and no mutating hooks ran.
+- The defaults and configuration interface are implemented and checked locally. Real-server acceptance of combat, flags, resource claims and replay remains unverified. No live attacks, native approval or push occurred; earlier pending-commit and preparation descriptions are historical snapshots superseded by this record.
+
 ## Current delivery decision
 
 - The user explicitly selected one local delivery with a size exception (`exception-ok`) for the exact six-file repair: 1239 authored changed lines at the decision. This includes code, tests and documentation; no cosmetic compression or test omissions are permitted.
