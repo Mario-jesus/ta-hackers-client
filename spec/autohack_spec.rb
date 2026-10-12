@@ -155,13 +155,63 @@ RSpec.describe 'Autohack script (offline contract)' do
   end
 
   describe 'argument handling' do
-    it 'prints usage without touching the game when args are empty' do
-      rig = build_script!(args: [])
+    it 'starts with the default count of one attack and without usage text' do
+      rig = build_script!(args: [], connected: false)
 
       rig.script.main
 
-      expect(rig.logger.entries.join("\n")).to include('usage: run autohack')
-      expect(rig.game).not_to have_received(:connected?)
+      joined = rig.logger.entries.join("\n")
+      expect(joined).to include('Not connected')
+      expect(joined).not_to include('usage: run autohack')
+      expect(joined).to include('requested attacks 1')
+      expect(rig.trace).to be_empty
+    end
+
+    it 'accepts an explicit --count N with no legacy warning' do
+      rig = build_script!(args: ['--count', '3'], connected: false)
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+      expect(joined).not_to include('usage: run autohack')
+      expect(joined).not_to include('Legacy positional argument')
+      expect(joined).to include('requested attacks 3')
+      expect(rig.trace).to be_empty
+    end
+
+    it 'warns loudly that the legacy positional count is not an ID' do
+      rig = build_script!(args: ['3'], connected: false)
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+      expect(joined).to include('Legacy positional argument is an attack count, not a player/network ID; prefer --count N')
+      expect(joined).not_to include('usage: run autohack')
+      expect(joined).to include('requested attacks 3')
+      expect(rig.trace).to be_empty
+    end
+
+    it 'still takes a huge legacy number as a count and warns the same way' do
+      rig = build_script!(args: ['99999999999999999999999'], connected: false)
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+      expect(joined).to include('Legacy positional argument is an attack count, not a player/network ID')
+      expect(joined).not_to include('usage: run autohack')
+      expect(joined).to include('requested attacks 99999999999999999999999')
+      expect(rig.trace).to be_empty
+    end
+
+    it 'accepts a huge id-like value through --count as an explicit count' do
+      rig = build_script!(args: ['--count', '42424242424242424242424'], connected: false)
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+      expect(joined).not_to include('usage: run autohack')
+      expect(joined).not_to include('Legacy positional argument')
+      expect(joined).to include('requested attacks 42424242424242424242424')
       expect(rig.trace).to be_empty
     end
 
@@ -217,6 +267,66 @@ RSpec.describe 'Autohack script (offline contract)' do
 
     it 'prints usage for --help without server effects' do
       rig = build_script!(args: ['--help'])
+
+      rig.script.main
+
+      expect(rig.logger.entries.join("\n")).to include('usage: run autohack')
+      expect(rig.game).not_to have_received(:connected?)
+      expect(rig.trace).to be_empty
+    end
+
+    it 'rejects a positional count combined with --count as ambiguous' do
+      rig = build_script!(args: ['--count', '3', '3'])
+
+      rig.script.main
+
+      expect(rig.logger.entries.join("\n")).to include('usage: run autohack')
+      expect(rig.game).not_to have_received(:connected?)
+      expect(rig.trace).to be_empty
+    end
+
+    it 'rejects duplicate --count options even with identical values' do
+      rig = build_script!(args: ['--count', '3', '--count', '3'])
+
+      rig.script.main
+
+      expect(rig.logger.entries.join("\n")).to include('usage: run autohack')
+      expect(rig.game).not_to have_received(:connected?)
+      expect(rig.trace).to be_empty
+    end
+
+    it 'rejects --count without a value' do
+      rig = build_script!(args: ['--count'])
+
+      rig.script.main
+
+      expect(rig.logger.entries.join("\n")).to include('usage: run autohack')
+      expect(rig.game).not_to have_received(:connected?)
+      expect(rig.trace).to be_empty
+    end
+
+    it 'rejects --count values that are not positive integers' do
+      rig = build_script!(args: ['--count', '0'])
+
+      rig.script.main
+
+      expect(rig.logger.entries.join("\n")).to include('usage: run autohack')
+      expect(rig.game).not_to have_received(:connected?)
+      expect(rig.trace).to be_empty
+    end
+
+    it 'rejects more than one positional token' do
+      rig = build_script!(args: ['3', '4'])
+
+      rig.script.main
+
+      expect(rig.logger.entries.join("\n")).to include('usage: run autohack')
+      expect(rig.game).not_to have_received(:connected?)
+      expect(rig.trace).to be_empty
+    end
+
+    it 'rejects unexpected options such as a --target flag' do
+      rig = build_script!(args: ['--target', '5'])
 
       rig.script.main
 
@@ -317,6 +427,16 @@ RSpec.describe 'Autohack script (offline contract)' do
       finished = rig.trace.find { |entry| entry.first == :finish_fight }
       expect(finished[2][:money]).to eq(400)
       expect(finished[2][:bitcoin]).to eq(987)
+    end
+
+    it 'announces the automatic selection plan before any battle call' do
+      rig = build_script!(args: ['--count', '1'])
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+      expect(joined).to include('Automatic target selection; requested attacks 1; coffers 5; timing 420..950; no IDs accepted')
+      expect(rig.trace.map(&:first)).to eq(%i[attack_net update_fight finish_fight leave_net])
     end
   end
 
@@ -462,8 +582,138 @@ RSpec.describe 'Autohack script (offline contract)' do
 
       expect(rig.trace.map(&:first)).to eq(%i[attack_net update_fight finish_fight leave_net])
       joined = rig.logger.entries.join("\n")
-      expect(joined).to include('0 successful attacks')
+      expect(joined).to include('primary failure: stage=leave, status unknown, type=unknown')
+      expect(joined).to include('Run stopped: 0 completed request sequences (of 1 attempted)')
+      expect(joined).to include('entry closure not confirmed')
+      expect(joined).not_to include('successful attacks')
       expect(joined).not_to include('raw-leave-body-marker')
+    end
+  end
+
+  describe 'failure diagnostics' do
+    it 'records the fight update failure stage with HTTP status and enum type once' do
+      rig = build_script!(
+        args: ['1'],
+        update_outcome: proc do |_target, _data|
+          raise Hackers::RequestError.new(Hackers::EXCEPTION_TYPE, nil, http_status: 500)
+        end
+      )
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+      expect(joined.scan('primary failure: stage=update').size).to eq(1)
+      expect(joined).to include('primary failure: stage=update, HTTP 500, type=Exception')
+      expect(joined).to include('Run stopped: 0 completed request sequences (of 1 attempted)')
+      expect(joined).to include('leave request completed; server closure unverified')
+      expect(joined).not_to include('successful attacks')
+      expect(rig.trace.map(&:first)).to eq(%i[attack_net update_fight leave_net])
+    end
+
+    it 'keeps the failing finish primary and reports a failed cleanup leave separately' do
+      rig = build_script!(
+        args: ['1'],
+        finish_outcome: proc do |_target, _data|
+          raise Hackers::RequestError.new('HTTP', 'raw-finish-body-marker', http_status: 500)
+        end,
+        leave_outcome: proc do |_target|
+          raise Hackers::RequestError.new(Hackers::EXCEPTION_TYPE, nil, http_status: 500)
+        end
+      )
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+      expect(joined.scan('primary failure: stage=').size).to eq(1)
+      expect(joined.scan('cleanup failure: stage=').size).to eq(1)
+      expect(joined).to include('primary failure: stage=finish, HTTP 500, type=HTTP')
+      expect(joined).to include('cleanup failure: stage=leave, HTTP 500, type=Exception')
+      expect(joined).to include('entry closure not confirmed')
+      expect(joined).not_to include('raw-finish-body-marker')
+      expect(rig.trace.map(&:first)).to eq(%i[attack_net update_fight finish_fight leave_net])
+      leave_calls = rig.trace.select { |entry| entry.first == :leave_net }
+      expect(leave_calls.size).to eq(1)
+    end
+
+    it 'labels an unrecognized error type as unknown without printing server tokens' do
+      rig = build_script!(
+        args: ['1'],
+        finish_outcome: proc do |_target, _data|
+          raise Hackers::RequestError.new('SomeUnexpectedType', 'raw-finish-body-marker')
+        end
+      )
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+      expect(joined).to include('primary failure: stage=finish, status unknown, type=unknown')
+      expect(joined).not_to include('SomeUnexpectedType')
+      expect(joined).not_to include('raw-finish-body-marker')
+    end
+
+    it 'does not claim a leave for the second entry when the first target completed and the second finish fails with a failed cleanup leave' do
+      t2 = target_for(888001, 'TargetTwo')
+      rig = build_script!(
+        args: ['--count', '2'],
+        target_pages: [[TARGET_MAIN, t2]],
+        finish_outcome: proc do |target, _data|
+          raise Hackers::RequestError.new('HTTP', 'raw-finish-body-marker', http_status: 500) if target == 888001
+        end,
+        leave_outcome: proc do |target|
+          raise Hackers::RequestError.new(Hackers::EXCEPTION_TYPE, nil, http_status: 500) if target == 888001
+        end
+      )
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+
+      attacked = rig.trace.select { |entry| entry.first == :attack_net }
+      expect(attacked.map { |entry| entry[1] }).to eq([777001, 888001])
+
+      leaved = rig.trace.select { |entry| entry.first == :leave_net }
+      expect(leaved.map { |entry| entry[1] }).to eq([777001, 888001])
+
+      expect(joined.scan('primary failure: stage=').size).to eq(1)
+      expect(joined.scan('cleanup failure: stage=').size).to eq(1)
+      expect(joined).to include('primary failure: stage=finish, HTTP 500, type=HTTP')
+      expect(joined).to include('cleanup failure: stage=leave, HTTP 500, type=Exception')
+      expect(joined).to include('entry closure not confirmed')
+      expect(joined).not_to include('leave request completed; server closure unverified')
+      expect(joined).not_to include('raw-finish-body-marker')
+      expect(joined).not_to include('successful attacks')
+    end
+
+    it 'does not claim a leave for the second entry when the first target completed and the second update fails with a failed cleanup leave' do
+      t2 = target_for(888001, 'TargetTwo')
+      rig = build_script!(
+        args: ['--count', '2'],
+        target_pages: [[TARGET_MAIN, t2]],
+        update_outcome: proc do |target, _data|
+          raise Hackers::RequestError.new(Hackers::EXCEPTION_TYPE, nil, http_status: 500) if target == 888001
+        end,
+        leave_outcome: proc do |target|
+          raise Hackers::RequestError.new(Hackers::EXCEPTION_TYPE, nil, http_status: 500) if target == 888001
+        end
+      )
+
+      rig.script.main
+
+      joined = rig.logger.entries.join("\n")
+
+      attacked = rig.trace.select { |entry| entry.first == :attack_net }
+      expect(attacked.map { |entry| entry[1] }).to eq([777001, 888001])
+
+      leaved = rig.trace.select { |entry| entry.first == :leave_net }
+      expect(leaved.map { |entry| entry[1] }).to eq([777001, 888001])
+
+      expect(joined.scan('primary failure: stage=').size).to eq(1)
+      expect(joined.scan('cleanup failure: stage=').size).to eq(1)
+      expect(joined).to include('primary failure: stage=update, HTTP 500, type=Exception')
+      expect(joined).to include('cleanup failure: stage=leave, HTTP 500, type=Exception')
+      expect(joined).to include('entry closure not confirmed')
+      expect(joined).not_to include('leave request completed; server closure unverified')
+      expect(joined).not_to include('successful attacks')
     end
   end
 
@@ -495,6 +745,11 @@ RSpec.describe 'Autohack script (offline contract)' do
       expect(rig.trace.none? { |entry| entry.first == :finish_fight }).to be(true)
       leaved = rig.trace.select { |entry| entry.first == :leave_net }
       expect(leaved.size).to eq(1)
+
+      joined = rig.logger.entries.join("\n")
+      expect(joined).to include('Run cancelled: 0 completed request sequences (of 1 attempted)')
+      expect(joined).to include('leave request completed; server closure unverified')
+      expect(joined).not_to include('successful attacks')
     end
 
     it 'Thread.kill after a confirmed entry leaves exactly once and never starts the next target' do
@@ -539,6 +794,15 @@ RSpec.describe 'Autohack script (offline contract)' do
       expect(attacked.map { |entry| entry[1] }).to eq([777001, 888001])
       expect(finished.map { |entry| entry[1] }).to eq([777001])
       expect(leave_net.map { |entry| entry[1] }).to eq([777001, 888001])
+
+      joined = rig.logger.entries.join("\n")
+      # A bare Thread.kill never calls the runner's finish hook, so the
+      # honest summary word here is stopped, not cancelled (the runner does
+      # finish() first in production; this test exercises the owner cleanup
+      # without it).
+      expect(joined).to include('Run stopped: 1 completed request sequences (of 2 attempted)')
+      expect(joined).to include('leave request completed; server closure unverified')
+      expect(joined).not_to include('successful attacks')
     end
   end
 end

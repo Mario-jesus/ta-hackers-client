@@ -29,7 +29,51 @@ class Autohack < Sandbox::Script
                  Hackers::Network::SUCCESS_RESOURCES |
                  Hackers::Network::SUCCESS_CONTROL
 
-  USAGE = 'usage: run autohack [--coffers 0..100] [--timing conservative|fast|MIN..MAX] <count>'
+  USAGE = 'usage: run autohack [--coffers 0..100] [--timing conservative|fast|MIN..MAX] [--count N] [<count>]'
+
+  # Attack count policy (odd/tasks/autohack-functional-repair.md T4): with
+  # no arguments the default is one attack, --count N is the explicit form
+  # and the legacy bare positional count stays accepted with a loud
+  # warning. There is intentionally no ID detection and no magnitude cap:
+  # every accepted value is a count, however large.
+  COUNT_DEFAULT = 1
+
+  LEGACY_COUNT_WARNING =
+    'Legacy positional argument is an attack count, not a player/network ID; prefer --count N'
+
+  # Typed diagnostic stage codes; stage identifiers are constant words.
+  STAGE_ATTACK = 'attack'
+  STAGE_UPDATE = 'update'
+  STAGE_FINISH = 'finish'
+  STAGE_LEAVE = 'leave'
+
+  # Static summary words; they carry no promise about server outcomes.
+  SUMMARY_COMPLETED = 'completed'
+  SUMMARY_STOPPED = 'stopped'
+  SUMMARY_CANCELLED = 'cancelled'
+
+  # Honest labels when no known safe value exists.
+  STATUS_UNKNOWN = 'status unknown'
+  TYPE_UNKNOWN = 'unknown'
+
+  # Closure wording is deliberately not 'closed': a completed leave request
+  # (even a raw accepted response) is not proof of server-side closure.
+  CLOSURE_LEAVE_COMPLETED = 'leave request completed; server closure unverified'
+  CLOSURE_NOT_CONFIRMED = 'entry closure not confirmed'
+  CLOSURE_NO_ENTRY = 'no confirmed entry'
+
+  # Allowlist of error types this codebase constructs deterministically
+  # (the 'Exception' envelope type plus the mapped game exceptions in
+  # lib/hackers/exceptions.rb, and the client's own 'HTTP' wrapper error).
+  # Server types may be arbitrary strings, so the final summary echoes a
+  # type only when it is allowlisted and prints the literal 'unknown'
+  # otherwise; no message, description or body token is ever echoed.
+  TYPED_ERROR_TYPES = ([Hackers::EXCEPTION_TYPE] + Hackers::EXCEPTIONS.keys + ['HTTP']).freeze
+
+  ##
+  # One typed failure record: stage code, safe HTTP status label and an
+  # allowlisted type label. Never carries a description, body or URL.
+  StageFailure = Struct.new(:stage, :status, :type)
 
   # App-settings versions for the replay string use the legacy draft key
   # strings. The current backend key names are unverified offline, so they
@@ -51,6 +95,11 @@ class Autohack < Sandbox::Script
     @open_target = nil
     @attempted = Set.new
     @completed_total = 0
+    @attempted_total = 0
+    @entry_confirmed = false
+    @leave_request_completed = false
+    @primary_failure = nil
+    @cleanup_failure = nil
   end
 
   ##
@@ -68,6 +117,8 @@ class Autohack < Sandbox::Script
     options = parse_options
     return unless options
 
+    announce_selection_plan(options)
+
     api = @game.api
     return unless preflight(api)
 
@@ -77,7 +128,7 @@ class Autohack < Sandbox::Script
       @logger.log("Stopping: #{e.message}")
     ensure
       close_open_target(api)
-      @logger.log("Run finished: #{@completed_total} successful attacks")
+      log_final_summary(options)
     end
   end
 
@@ -87,6 +138,15 @@ class Autohack < Sandbox::Script
   # Parses raw argument tokens (OptionParser over the sandbox args). Any
   # invalid option, value, timing or count prints actionable usage and
   # returns nil before any server call happens.
+  #
+  # Count resolution: --count N wins; then at most one legacy positional
+  # integer (accepted with the loud legacy warning); then the default of
+  # one. A positional token together with --count, duplicate --count
+  # options (even with identical values), more than one positional token,
+  # or a non-positive or non-numeric count value is rejected with usage
+  # before any call. Huge digit runs are still counts - there is no ID
+  # detection or magnitude cap, because the legacy form was kept by user
+  # decision.
   def parse_options
     tokens = Array(@args).dup
 
@@ -95,7 +155,8 @@ class Autohack < Sandbox::Script
       return nil
     end
 
-    options = { coffers: COFFERS_DEFAULT, timing: TIMING_CONSERVATIVE }
+    options = { coffers: COFFERS_DEFAULT, timing: TIMING_CONSERVATIVE, count: COUNT_DEFAULT }
+    count_given = false
 
     parser = OptionParser.new do |opts|
       opts.on('--coffers PERCENT') do |value|
@@ -111,19 +172,50 @@ class Autohack < Sandbox::Script
 
         options[:timing] = seconds
       end
+
+      opts.on('--count COUNT') do |value|
+        return usage('count given more than once') if count_given
+
+        valid, count = parse_count(value)
+        return usage('count must be a positive integer') unless valid
+
+        count_given = true
+        options[:count] = count
+      end
     end
 
     begin
       parser.parse!(tokens)
     rescue OptionParser::ParseError
-      return usage('invalid or unexpected option')
+      return usage('invalid, unexpected or incomplete option')
     end
 
-    return usage('a running count is required') if tokens.length != 1
-    return usage('count must be a positive integer') unless tokens.first.match?(/\A\d+\z/) && !tokens.first.to_i.zero?
+    return usage('pass either --count N or one legacy positional count, not both') if count_given && !tokens.empty?
+    return usage('only one bare positional count is accepted') if tokens.length > 1
 
-    options[:count] = tokens.first.to_i
+    legacy_positional = false
+    unless tokens.empty?
+      valid, count = parse_count(tokens.first)
+      return usage('count must be a positive integer') unless valid
+
+      legacy_positional = true
+      options[:count] = count
+    end
+
+    @logger.log(LEGACY_COUNT_WARNING) if legacy_positional
+
     options
+  end
+
+  ##
+  # Positive decimal digits only, no magnitude cap and no ID guesses: any
+  # accepted value is an attack count, exactly as typed.
+  def parse_count(value)
+    text = value.to_s
+    return [false, nil] unless text.match?(/\A\d+\z/)
+
+    count = text.to_i
+    [count.positive?, count]
   end
 
   def parse_coffers(value)
@@ -150,6 +242,101 @@ class Autohack < Sandbox::Script
     @logger.log("Invalid arguments: #{reason}")
     @logger.log(USAGE)
     nil
+  end
+
+  ##
+  # One human-readable plan line before any battle call. Safe constants
+  # only: requested count, coffers percentage and timing interval. No IDs
+  # are asked for anywhere in this script; the world's offered targets are
+  # selected automatically (id 127 is skipped).
+  def announce_selection_plan(options)
+    @logger.log(
+      "Automatic target selection; requested attacks #{options[:count]}; " \
+      "coffers #{options[:coffers]}; timing #{options[:timing].first}..#{options[:timing].last}; " \
+      'no IDs accepted'
+    )
+  end
+
+  ##
+  # Final run summary, written once after all cleanup, in the same ensure
+  # that runs for normal completion and Thread.kill. It distinguishes a
+  # completed run, a cancelled run and a stopped run; reports local request
+  # counters with the explicit note that server outcomes are unverified;
+  # keeps the primary failure and the cleanup failure as separate records;
+  # and claims a closed known entry only when a leave request actually
+  # confirmed it. There is no 'successful attacks' claim anywhere.
+  def log_final_summary(options)
+    lines = [
+      "Run #{summary_status(options)}: #{@completed_total} completed request sequences (of #{@attempted_total} attempted)"
+    ]
+    lines << 'server outcomes unverified'
+    lines << "primary failure: stage=#{@primary_failure.stage}, #{@primary_failure.status}, type=#{@primary_failure.type}" if @primary_failure
+    lines << "cleanup failure: stage=#{@cleanup_failure.stage}, #{@cleanup_failure.status}, type=#{@cleanup_failure.type}" if @cleanup_failure
+    lines << entry_closure_line
+
+    @logger.log(lines.join('; '))
+  end
+
+  ##
+  # StopRun messages stay static local sentences (never private bodies or
+  # exception text), so the summary word only distinguishes completion,
+  # cancellation and a stop.
+  def summary_status(options)
+    if @primary_failure.nil? && @cleanup_failure.nil? && completed?(options[:count])
+      SUMMARY_COMPLETED
+    elsif stop_requested?
+      SUMMARY_CANCELLED
+    else
+      SUMMARY_STOPPED
+    end
+  end
+
+  ##
+  # A closed known entry is claimed only when a leave request was accepted
+  # without an exception; uncertainty is stated, never papered over. Per
+  # verifier finding F2, even a completed raw leave response is NOT an
+  # authoritative server closure, so the wording stays descriptive.
+  def entry_closure_line
+    return CLOSURE_LEAVE_COMPLETED if @leave_request_completed
+    return CLOSURE_NOT_CONFIRMED if @entry_confirmed
+
+    CLOSURE_NO_ENTRY
+  end
+
+  def record_primary_failure(stage, error = nil)
+    @primary_failure = typed_failure(stage, error)
+  end
+
+  def record_cleanup_failure(stage, error = nil)
+    @cleanup_failure = typed_failure(stage, error)
+  end
+
+  def typed_failure(stage, error)
+    return StageFailure.new(stage, STATUS_UNKNOWN, TYPE_UNKNOWN) if error.nil?
+
+    StageFailure.new(stage, status_label(error), type_label(error))
+  end
+
+  ##
+  # Safe status evidence: an actual HTTP status only when the exception
+  # carries an integer in the 100..599 range.
+  def status_label(error)
+    status = error.http_status if error.respond_to?(:http_status)
+    return "HTTP #{status}" if status.is_a?(Integer) && status.between?(100, 599)
+
+    STATUS_UNKNOWN
+  end
+
+  ##
+  # Safe type evidence: only allowlisted, deterministically constructed
+  # types are echoed; an absent value or an arbitrary server/transport
+  # string prints the literal "unknown" instead.
+  def type_label(error)
+    type = error.type if error.respond_to?(:type)
+    type = type.to_s.strip
+    return TYPE_UNKNOWN unless TYPED_ERROR_TYPES.include?(type)
+
+    type
   end
 
   ##
@@ -275,6 +462,7 @@ class Autohack < Sandbox::Script
   # validated attack response, and that known entry is closed by this
   # thread's ensure through close_open_target, exactly once.
   def attempt_target(target, api, options)
+    @attempted_total += 1
     net = attack_stage(target, api)
 
     record_open_target(target.id)
@@ -293,6 +481,7 @@ class Autohack < Sandbox::Script
       )
     rescue StandardError => e
       @logger.log("Fight update failed: #{e.class}")
+      record_primary_failure(STAGE_UPDATE, e)
       raise StopRun, 'Fight update failed; leaving the known entry'
     end
 
@@ -305,6 +494,7 @@ class Autohack < Sandbox::Script
       @logger.log('Legacy server fight result is raw and not verified')
     rescue StandardError => e
       @logger.log("Fight finish failed: #{e.class}")
+      record_primary_failure(STAGE_FINISH, e)
       raise StopRun, 'Fight finish failed; leaving network'
     end
 
@@ -313,8 +503,10 @@ class Autohack < Sandbox::Script
     release_open_target
     begin
       api.leave_net(target.id)
+      @leave_request_completed = true
     rescue StandardError => e
       @logger.log("Fight cleanup failed: #{e.class}")
+      record_primary_failure(STAGE_LEAVE, e)
       raise StopRun, 'Fight cleanup (leave) failed; stopping'
     end
 
@@ -338,12 +530,14 @@ class Autohack < Sandbox::Script
       net = api.attack_net(target.id)
     rescue StandardError => e
       @logger.log("Attack request failed: #{e.class}")
+      record_primary_failure(STAGE_ATTACK, e)
       @logger.log('Attack outcome is uncertain; run stopped; manual inspection is required')
       raise StopRun, 'Attack outcome uncertain; no further targets'
     end
 
     unless net.is_a?(Hash) && net.key?('profile') && !net['profile'].nil?
       @logger.log('Attack response has no usable profile')
+      record_primary_failure(STAGE_ATTACK)
       @logger.log('Attack outcome is uncertain; run stopped; manual inspection is required')
       raise StopRun, 'Attack outcome uncertain; no further targets'
     end
@@ -391,7 +585,14 @@ class Autohack < Sandbox::Script
   end
 
   def record_open_target(target)
-    @mutex.synchronize { @open_target = target }
+    @mutex.synchronize do
+      @open_target = target
+      @entry_confirmed = true
+      # Per-entry reset (verifier finding F1): a leave completion from an
+      # earlier, long-closed target must never be reported for a NEWLY
+      # confirmed entry. Pure field writes; no IO is held under the mutex.
+      @leave_request_completed = false
+    end
   end
 
   def open_target
@@ -415,8 +616,10 @@ class Autohack < Sandbox::Script
 
     begin
       api.leave_net(target)
+      @leave_request_completed = true
     rescue StandardError => e
       @logger.log("Confirmed-entry cleanup failed: #{e.class}")
+      record_cleanup_failure(STAGE_LEAVE, e)
     end
   end
 end

@@ -23,14 +23,46 @@ state. Full connect does not itself load every player network or world dataset.
 ## Autohack usage (offline-verified script contract only)
 
 ```
-run autohack [--coffers 0..100] [--timing conservative|fast|MIN..MAX] <count>
+run autohack                                     # no arguments: default count 1
+run autohack --coffers 40 --timing fast --count 3
+run autohack 3                                   # legacy positional count, deprecated: warns
 ```
+
+Counts: no arguments means one attack; `--count N` is the explicit form
+(positive integer); the legacy bare positional count still runs and logs
+`Legacy positional argument is an attack count, not a player/network ID; prefer
+--count N`. There is no ID detection and no magnitude cap (kept for
+compatibility by user decision), so a huge digit run is taken as an attack
+count. A positional count together with `--count`, duplicate `--count`
+options, more than one positional token or a non-positive/non-numeric value
+prints usage and makes zero game calls. No manual target/ID flags exist:
+targets are selected automatically from the offered world list, target id 127
+is skipped and each id is attempted at most once per run.
 
 Defaults: coffers 5 (integer floor percentage of the attacked target's
 validated coffers, computed per currency with no compounding), timing
 conservative 420..950 (`fast` = 15..25; a custom `MIN..MAX` needs a positive
-minimum) and a positive-integer count. Target id 127 is skipped and each
-target id is attempted at most once per run.
+minimum). Before any battle call the script logs one plan line: automatic
+target selection, requested attacks, coffers, timing; no IDs accepted.
+
+Failure summaries: the final summary line distinguishes completed, stopped and
+cancelled runs, reports completed request sequences and attempted attacks as
+local counts only, labels the failing stage (`attack`/`update`/`finish`/
+`leave`) with an HTTP status plus an allowlisted error type (or the literal
+`unknown`), and states `leave request completed; server closure unverified`
+when the last leave request actually returned (an accepted raw response is
+still not proof of server-side closure), `entry closure not confirmed` when a
+confirmed entry's leave did not complete, or `no confirmed entry` when none
+was confirmed. It never claims successful attacks or a server-side closure:
+the generic harness `Done` line only means the job ended, not a win or proof;
+server outcomes stay unverified even after a validated finish response.
+
+Background use: wait for the script's own final summary line; an immediate
+exit or process cancel may stop the job before finalization so cleanup stays
+unknown, and no shutdown guarantee is claimed. Known fight finish/leave HTTP
+500 failures are unaddressed locally: real backend acceptance is pending
+(offline UX only, no engine proposal), and the legacy replay scripts remain
+out of scope.
 
 ## Representative prerequisites (static inspection only)
 
@@ -39,7 +71,7 @@ target id is attempted at most once per run.
 | `scripts/fingoals.rb` | Goal types catalog for amounts and credits | Loads world goals, then calls goal updates repeatedly |
 | `scripts/missions.rb` | Missions list catalog for mission names; player ID argument | Loads that player's mission log for display |
 | `scripts/colres.rb` | Node types catalog for production limits, speeds and currencies | Loads player network/profile, then collects eligible production nodes repeatedly |
-| `scripts/autohack.rb` | Own player country; app settings `node types`/`program types` values (runtime-validated; the exact key strings remain unverified); loaded world targets | Bounded attack run over listed targets: one zero-loot update, one final fight at the configured coffers percentage, then a network leave; blank protocol versions are refused |
+| `scripts/autohack.rb` | Own player country; app settings `node types`/`program types` values (runtime-validated; the exact key strings remain unverified); loaded world targets | Bounded attack run over listed targets: one zero-loot update, one final fight at the configured coffers percentage, then a network leave; blank protocol versions are refused; a typed final failure summary reports completed request sequences only, never successful attacks |
 
 `lib/cli/context/script.rb` dispatches scripts with GAME, shell, logger and
 arguments; `lib/cli/sandbox.rb` stores these references. Neither initializes the
