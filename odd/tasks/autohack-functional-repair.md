@@ -2,6 +2,9 @@
 
 ## T4 local delivery decision — 2026-10-11
 
+- **T4 local delivery completed:** `cce05bc101a7575ab4873ece005dbbb2bdd0589f` (`fix(autohack): clarify automatic selection and request outcomes`), exactly the four authorized files. Parent final-byte offline check before commit: **1146 examples, 0 failures (33.25 s)**, excluding exactly the private default-configuration example; staged scope and hook absence verified.
+- This final record supersedes T4's earlier pending-commit notes only. Automatic target selection, legacy-count compatibility and honest request/closure diagnostics are checked locally; server fight acceptance remains unresolved under T5. No push, new backend call or native approval occurred.
+
 - The user explicitly accepted one coherent local delivery with a size exception (`exception-ok`) for the four-file, 551-authored-line automatic-selection/count/diagnostics change. Legacy positional counts remain accepted with a warning; default count is one and `--count N` is explicit. No manual target or attacker IDs are accepted.
 - Independent post-correction verification: 42 focused examples, 0 failures. Writer final-byte full offline verification: 1146 examples, 0 failures, excluding exactly the private default-configuration example. Parent final check and local commit are pending; this decision authorizes neither push nor a claim of backend success. T5 remains open.
 
