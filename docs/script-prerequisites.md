@@ -59,10 +59,16 @@ server outcomes stay unverified even after a validated finish response.
 
 Background use: wait for the script's own final summary line; an immediate
 exit or process cancel may stop the job before finalization so cleanup stays
-unknown, and no shutdown guarantee is claimed. Known fight finish/leave HTTP
-500 failures are unaddressed locally: real backend acceptance is pending
-(offline UX only, no engine proposal), and the legacy replay scripts remain
-out of scope.
+unknown, and no shutdown guarantee is claimed. One active `autohack` at a
+time is enforced offline by the runner: a second `run autohack` is refused
+until the active job ends, and the `autohack` / `./autohack` forms are two
+spellings of the same script so they count as one active job. The refusal
+says `autohack is already running as job [N]; wait for it to finish`; other
+script names are not subject to that admission check, and no script run is
+transaction-protected against server-side combat outcomes. Known fight
+finish/leave HTTP 500 failures are unaddressed locally: real backend
+acceptance is pending (offline UX only, no engine proposal), and the legacy
+replay scripts remain out of scope.
 
 ## Representative prerequisites (static inspection only)
 
