@@ -172,6 +172,51 @@ RSpec.describe 'Anti-AFK session cycle' do
     expect(silence_at).to eq(10_800)
   end
 
+  [false, true].each do |late_success|
+    it "keeps the gate closed into scheduled silence when recovery #{late_success ? 'succeeds late' : 'keeps failing'}" do
+      c = client
+      api = double('api', client: c)
+      allow(api).to receive(:sid=)
+      game = double('game', api: api, player: double('player', load: nil))
+      script = Antiafk.new(game, nil, double('logger', info: nil, error: nil), [])
+      now = 0.0
+      attempts, waits, silences = [], [], []
+      allow(script).to receive(:monotonic) { now }
+      allow(script).to receive(:rand).with(240..300) { silences << now; 240 }
+      allow(script).to receive(:sleep) do |seconds|
+        waits << [now, seconds, c.session_paused?]
+        if seconds == 240
+          count = attempts.length
+          expect { c.request_raw({}) }.to raise_error(Hackers::RequestError, /paused/)
+          now += seconds
+          expect(attempts.length).to eq(count)
+        else
+          now += now.zero? ? 10_740 : seconds
+        end
+      end
+      allow(game).to receive(:auth_minimal) do
+        attempts << now
+        throw :done if attempts.length > 25 || (!silences.empty? && now >= silences.first + 1200)
+        next if now.zero?
+        if late_success && now == 10_770
+          now = 10_810 # An admitted recovery operation finishes beyond its deadline.
+          next
+        end
+        raise Hackers::RequestError.new('Auth', 'rejected')
+      end
+      catch(:done) { script.main }
+      expect(silences).to eq([late_success ? 10_810 : 10_800])
+      expect(attempts.first(5)).to eq([0, 10_740, 10_740, 10_750, 10_770])
+      expect(waits.find { |time, _, _| time == 10_770 }[1]).to eq(30) unless late_success
+      expect(waits.drop(1).all? { |_, _, paused| paused }).to be(true)
+      silence_start = silences.first
+      expect(attempts.none? { |time| time >= silence_start && time < silence_start + 240 }).to be(true)
+      recovery_waits = waits.select { |time, _, _| time >= silence_start + 240 }.map { |_, seconds, _| seconds }
+      expect(recovery_waits.first(7)).to eq([10, 20, 40, 80, 160, 180, 180])
+      expect(c.session_paused?).to be(false)
+    end
+  end
+
   it 'maintains authenticated presence, waits three hours, silences and retries beyond three minutes' do
     c = client
     api = double('api', client: c)

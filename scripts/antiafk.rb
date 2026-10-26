@@ -23,9 +23,15 @@ class Antiafk < Sandbox::Script
             maintain_session
           rescue Hackers::RequestError
             @logger.error('Authenticated maintenance failed; recovering exclusively')
-            @game.api.client.with_session_pause { |recover| reconnect(recover) }
-            # Transient recovery is not the scheduled silence: retain the
-            # original three-hour deadline, even after repeated failures.
+            silenced = false
+            @game.api.client.with_session_pause do |recover|
+              unless reconnect(recover, deadline: online_since + ONLINE_INTERVAL)
+                # Keep the same closed gate when recovery reaches the deadline.
+                silence_and_reconnect(recover)
+                silenced = true
+              end
+            end
+            online_since = monotonic if silenced
           end
         end
       end
@@ -45,33 +51,40 @@ class Antiafk < Sandbox::Script
 
   def scheduled_pause
     @logger.info('Draining tool traffic for scheduled silence')
-    @game.api.client.with_session_pause do |recover|
-      @game.api.sid = nil
-      duration = rand(240..300)
-      @logger.info("Tool traffic silent for #{duration} seconds; stopping this job cancels silence")
-      deadline = monotonic + duration
-      sleep(deadline - monotonic) while monotonic < deadline
-      reconnect(recover)
-    end
+    @game.api.client.with_session_pause { |recover| silence_and_reconnect(recover) }
   end
 
-  def reconnect(recover)
+  def silence_and_reconnect(recover)
+    @game.api.sid = nil
+    duration = rand(240..300)
+    @logger.info("Tool traffic silent for #{duration} seconds; stopping this job cancels silence")
+    deadline = monotonic + duration
+    sleep(deadline - monotonic) while monotonic < deadline
+    reconnect(recover)
+  end
+
+  def reconnect(recover, deadline: nil)
     delay = 10
     loop do
+      return false if deadline && monotonic >= deadline
+
       complete = false
       begin
         @game.api.sid = nil
         @logger.info('Reconnecting exclusively')
         recover.call { maintain_session }
+        return false if deadline && monotonic >= deadline
+
         complete = true
         @logger.info('Authenticated player loaded; tool traffic resumed')
-        return
+        return true
       rescue Hackers::RequestError
         @logger.error("Reconnection failed; retrying in #{delay} seconds")
       ensure
         @game.api.sid = nil unless complete
       end
-      sleep(delay)
+      wait = deadline ? [delay, deadline - monotonic].min : delay
+      sleep(wait) if wait.positive?
       delay = [delay * 2, RETRY_MAX].min
     end
   end

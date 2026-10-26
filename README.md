@@ -58,6 +58,9 @@ Other scripts and interactive requests fail immediately with an actionable
 `Hackers::RequestError` during drain, silence, and recovery; they are not queued
 for replay with stale sessions or mutations. A maintenance failure also enters
 exclusive recovery without postponing the original three-hour silence deadline.
+Retry waits stop at that deadline and transition directly into scheduled silence
+without reopening traffic. An in-flight recovery that finishes after the deadline
+also enters silence immediately; post-silence retries restart at 10 seconds.
 Authentication already in progress is drained through response parsing and local
 state updates before silence starts, so it cannot overwrite a recovered session.
 Logs describe phases without session IDs or credentials.
