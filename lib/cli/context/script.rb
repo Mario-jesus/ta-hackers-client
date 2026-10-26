@@ -32,7 +32,9 @@ end
 # never silently executes a different file, because the typed file path
 # itself is what load executes below.
 def script_canonical_identity(script, file)
-  return 'autohack' if script_file_identity(file) == script_file_identity(File.join(SCRIPT_DIR, "autohack#{SCRIPT_EXT}"))
+  %w[autohack antiafk].each do |name|
+    return name if script_file_identity(file) == script_file_identity(File.join(SCRIPT_DIR, "#{name}#{SCRIPT_EXT}"))
+  end
 
   script
 end
@@ -111,16 +113,16 @@ CONTEXT_SCRIPT_RUN = CONTEXT_SCRIPT.add_command(
 
   canonical = script_canonical_identity(script, file)
 
-  # One writer per active autohack run: the busy check and the fee-free
+  # One writer per active autohack or antiafk run: the busy check and the fee-free
   # reservation (`thread: nil`) commit atomically before any thread spawn.
   # The job counter only advances for admitted jobs, so refusals leave no
-  # gaps. Every other script name stays freely concurrent.
+  # gaps. Other script names stay freely concurrent.
   admission = nil
   SCRIPT_JOBS_MUTEX.synchronize do
     active_job = nil
-    if canonical == 'autohack'
+    if %w[autohack antiafk].include?(canonical)
       SCRIPT_JOBS.each do |id, record|
-        next unless record[:script] == 'autohack'
+        next unless record[:script] == canonical
 
         thread = record[:thread]
         if thread.nil? || thread.alive?
@@ -140,7 +142,7 @@ CONTEXT_SCRIPT_RUN = CONTEXT_SCRIPT.add_command(
   end
 
   if admission[0] == :busy
-    shell.puts("autohack is already running as job [#{admission[1]}]; wait for it to finish")
+    shell.puts("#{canonical} is already running as job [#{admission[1]}]; wait for it to finish")
     next
   end
 

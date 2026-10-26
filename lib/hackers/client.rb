@@ -50,6 +50,13 @@ module Hackers
       accept_encoding.unshift(ENCODING_GZIP) if @compression
       @headers['Accept-Encoding'] = accept_encoding.join(', ')
 
+      @traffic_mutex = Mutex.new
+      @traffic_drained = ConditionVariable.new
+      @active_requests = 0
+      @cycle_owner = nil
+      @session_paused = false
+      @recovery = false
+
       @clients = {}
       amount.times do
         client = Net::HTTP.new(host, port.to_i)
@@ -59,6 +66,67 @@ module Hackers
         client.write_timeout = WRITE_TIMEOUT
         client.max_retries = MAX_RETRIES
         @clients[client] = Mutex.new
+      end
+    end
+
+    # One owner controls scheduled silence. Interrupt masking closes the gap
+    # between acquiring ownership/admission and installing its ensure cleanup.
+    def with_session_cycle
+      Thread.handle_interrupt(Exception => :never) do
+        @traffic_mutex.synchronize do
+          raise RequestError.new('Session', 'anti-AFK already running') if @cycle_owner
+
+          @cycle_owner = Thread.current
+        end
+        begin
+          Thread.handle_interrupt(Exception => :immediate) { yield }
+        ensure
+          @traffic_mutex.synchronize do
+            @session_paused = @recovery = false
+            @cycle_owner = nil
+          end
+        end
+      end
+    end
+
+    def session_paused?
+      @traffic_mutex.synchronize { @session_paused }
+    end
+
+    # Close admission BEFORE draining. The yielded capability can only be used
+    # by this owner while this pause is live; it never admits other threads.
+    def with_session_pause
+      raise RequestError.new('Session', 'anti-AFK owner required') unless @cycle_owner == Thread.current
+
+      Thread.handle_interrupt(Exception => :never) do
+        @traffic_mutex.synchronize do
+          raise RequestError.new('Session', 'Traffic already paused') if @session_paused
+
+          @session_paused = true
+        end
+        begin
+          Thread.handle_interrupt(Exception => :immediate) do
+            @traffic_mutex.synchronize do
+              @traffic_drained.wait(@traffic_mutex) until @active_requests.zero?
+            end
+            recover = proc do |&operation|
+              @traffic_mutex.synchronize do
+                unless @cycle_owner == Thread.current && @session_paused
+                  raise RequestError.new('Session', 'recovery owner required')
+                end
+                @recovery = true
+              end
+              begin
+                operation.call
+              ensure
+                @traffic_mutex.synchronize { @recovery = false }
+              end
+            end
+            yield recover
+          end
+        ensure
+          @traffic_mutex.synchronize { @session_paused = @recovery = false }
+        end
       end
     end
 
@@ -86,6 +154,32 @@ module Hackers
     ##
     # Does the raw request
     def request_raw(params, data: {})
+      with_request_operation { perform_request(params, data: data) }
+    end
+
+    # Drain whole authenticated operations, including response parsing and local
+    # commits, not just their HTTP portion. Nested admissions are independently
+    # balanced; no transport or parsing runs while the gate mutex is held.
+    def with_request_operation
+      Thread.handle_interrupt(Exception => :never) do
+        @traffic_mutex.synchronize do
+          if @session_paused && !(@cycle_owner == Thread.current && @recovery)
+            raise RequestError.new('Session', 'Traffic paused by anti-AFK; retry after recovery or stop its job')
+          end
+          @active_requests += 1
+        end
+        begin
+          Thread.handle_interrupt(Exception => :immediate) { yield }
+        ensure
+          @traffic_mutex.synchronize do
+            @active_requests -= 1
+            @traffic_drained.broadcast if @active_requests.zero?
+          end
+        end
+      end
+    end
+
+    def perform_request(params, data: {})
       client, mutex = @clients.detect { |_, v| !v.locked? }
       client, mutex = @clients.to_a.first if client.nil?
 
@@ -104,6 +198,8 @@ module Hackers
 
       body
     end
+
+    private :perform_request
 
     ##
     # Does the hashed request

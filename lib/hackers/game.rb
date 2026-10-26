@@ -79,35 +79,39 @@ module Hackers
     # Authenticates by id and password without catalog, mission or profile
     # decoding: exactly one auth request, only the session id is extracted
     def auth_minimal
-      raw_data = @api.auth
-      data = Serializer.parseData(raw_data)
+      @api.client.with_request_operation do
+        raw_data = @api.auth
+        data = Serializer.parseData(raw_data)
 
-      sid = data.dig(0, 0, 3)
-      if sid.nil? || sid.to_s.empty?
-        raise Hackers::RequestError.new('Auth', 'empty session id')
+        sid = data.dig(0, 0, 3)
+        if sid.nil? || sid.to_s.empty?
+          raise Hackers::RequestError.new('Auth', 'empty session id')
+        end
+
+        @api.sid = sid
       end
-
-      @api.sid = sid
     end
 
     ##
     # Authenticates by id and password
     def auth
-      raw_data = @api.auth
-      data = Serializer.parseData(raw_data)
+      @api.client.with_request_operation do
+        raw_data = @api.auth
+        data = Serializer.parseData(raw_data)
 
-      sid = data.dig(0, 0, 3)
-      if sid.nil? || sid.to_s.empty?
-        raise Hackers::RequestError.new('Auth', 'empty session id')
+        sid = data.dig(0, 0, 3)
+        if sid.nil? || sid.to_s.empty?
+          raise Hackers::RequestError.new('Auth', 'empty session id')
+        end
+
+        @player.tutorial = data.dig(0, 0, 2).to_i
+        @api.sid = sid
+        @player.profile.rank = data.dig(0, 0, 4).to_i
+        @player.profile.experience = data.dig(0, 0, 5).to_i
+
+        @missions.data = data[2]
+        @missions.parse
       end
-
-      @player.tutorial = data.dig(0, 0, 2).to_i
-      @api.sid = sid
-      @player.profile.rank = data.dig(0, 0, 4).to_i
-      @player.profile.experience = data.dig(0, 0, 5).to_i
-
-      @missions.data = data[2]
-      @missions.parse
     end
 
     ##

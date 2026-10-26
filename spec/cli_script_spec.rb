@@ -272,6 +272,19 @@ RSpec.describe 'CLI script runner offline job lifecycle (autohack admission guar
     Object.const_set(:CONTEXT_SCRIPT, @prior_context_script[1]) if @prior_context_script
   end
 
+  it 'refuses canonical anti-AFK duplicates while a start reservation has no thread yet' do
+    CLISCRIPT_RUNSPEC[:files_ok] << File.expand_path(canned_file('antiafk'))
+    with_jobs_lock do
+      SCRIPT_JOBS[1] = { script: 'antiafk', thread: nil, instance: nil }
+      SCRIPT_VARS[:job_counter] = 1
+    end
+    run_command!(['run', './antiafk'])
+    expect(output_text).to include('antiafk is already running as job [1]')
+    expect(CLISCRIPT_RUNSPEC[:threads]).to be_empty
+    expect(CLISCRIPT_RUNSPEC[:loads]).to be_empty
+    expect(SCRIPT_VARS[:job_counter]).to eq(1)
+  end
+
   context 'duplicate active autohack admission' do
     it 'reserves the active autohack before thread spawn and refuses a duplicate with no additional thread' do
       run_command!(['run', 'autohack'])
