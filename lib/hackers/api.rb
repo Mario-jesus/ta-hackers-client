@@ -509,6 +509,26 @@ module Hackers
 
     ##
     # Gets network for attack
+    #
+    # Restores the documented net_get_for_attack parse contract (serializer
+    # commit 9eb0951, #parseNetGetForAttack) with the current public parser
+    # classes:
+    #
+    #   {
+    #     'nodes'   => raw parsed section 0 (unmodeled fields),
+    #     'net'     => raw parsed section 1 (unmodeled; net string at 1,0,1),
+    #     'profile' => Hackers::Serializer::Profile::Data,
+    #     'readme'  => raw parsed section 4 (unmodeled; message at 4,0)
+    #   }
+    #
+    # The raw sections are NOT the formerly modeled node/net/readme
+    # structures of that commit, and this is not a claim of full old-model
+    # compatibility. Only the profile is modeled and validated: a missing
+    # or malformed profile raises Hackers::Serializer::ParserError before
+    # any percentage math, and money/bitcoins must arrive as nonnegative
+    # integer strings (zero is valid) so callers never receive amounts
+    # invented silently by #to_i. Other profile fields keep the Profile
+    # class's own historical integer parsing.
     def attack_net(target, id = @id)
       params = {
         'net_get_for_attack' => 1,
@@ -518,8 +538,22 @@ module Hackers
       }
 
       response = @client.request_session(params, @sid)
-      serializer = Serializer.new(response)
-      serializer.parseNetGetForAttack
+      data = Serializer.parseData(response)
+
+      serializer_profile = Serializer::Profile.new(response)
+      profile = serializer_profile.parse(2, 0)
+      profile_record = serializer_profile.record(2, 0)
+      unless profile_record[2].to_s.match?(/\A\d+\z/) &&
+             profile_record[3].to_s.match?(/\A\d+\z/)
+        raise Serializer::ParserError, 'Invalid profile currencies'
+      end
+
+      {
+        'nodes'   => data[0],
+        'net'     => data[1],
+        'profile' => profile,
+        'readme'  => data[4]
+      }
     end
 
     ##

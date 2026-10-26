@@ -28,9 +28,18 @@ Clone the repository to your local machine and prepare the environment:
 ```console
 git clone https://github.com/animotto/ta-hackers
 cd ta-hackers
-bundle install
+# Use Ruby 3.3.12 and Bundler 2.5.22.
+export BUNDLE_PATH="$PWD/.bundle/native-readline"
+export BUNDLE_APP_CONFIG="$PWD/.bundle"
+export BUNDLE_FROZEN=true
+bundle _2.5.22_ install
 export RUBYLIB=$PWD/lib
 ```
+
+Before interactive use, [build the native callback with GNU Readline 8.3](docs/cli-interactive-chat.md#reproducible-native-build-and-tests).
+The ignored native artifact is not delivered by Git: rebuild it after pulling
+native source changes or changing Ruby/toolchains. Batch/non-TTY use does not
+load this editor.
 
 Create a new account and write the credentials to the config named *my*:
 ```console
@@ -41,6 +50,39 @@ Run the sandbox with the config *my*:
 ```console
 ./bin/sandbox -c my
 ```
+
+## Anti-AFK session cycle
+
+Run `script run antiafk` in an authenticated sandbox. Only one anti-AFK job
+may run at a time (including `./antiafk` aliases). Use `script jobs` to find
+its job ID and `script kill <id>` to stop it.
+
+| Phase | Local behavior |
+|-------|----------------|
+| Online | Minimal authentication followed by player loading about every 60 seconds; a monotonic clock measures each three-hour online cycle. |
+| Drain and silence | Reject new requests throughout this tool, wait for admitted requests to finish, clear the local session ID, then remain silent for a randomly chosen inclusive 240–300 seconds. |
+| Recovery | Only the anti-AFK owner can send recovery requests. Authentication **and** player loading must succeed before other traffic reopens. Request errors retry indefinitely after 10, 20, 40, 80, 160, then 180 seconds (capped); successful recovery resets the cycle and backoff. |
+
+Other scripts and interactive requests fail immediately with an actionable
+`Hackers::RequestError` during drain, silence, and recovery; they are not queued
+for replay with stale sessions or mutations. A maintenance failure also enters
+exclusive recovery without postponing the original three-hour silence deadline.
+Retry waits stop at that deadline and transition directly into scheduled silence
+without reopening traffic. An in-flight recovery that finishes after the deadline
+also enters silence immediately; post-silence retries restart at 10 seconds.
+Authentication already in progress is drained through response parsing and local
+state updates before silence starts, so it cannot overwrite a recovered session.
+Logs describe phases without session IDs or credentials.
+
+**Stopping the job cancels its control:** cleanup releases the traffic gate,
+even during drain, silence, or recovery. This deliberately ends the scheduled
+silence early; a cleared session remains cleared unless recovery completed.
+Authenticate again before issuing session-dependent commands if necessary.
+
+This is local traffic scheduling, not a logout endpoint or a guarantee against
+server-side inactivity, attacks, or session takeover. The server may retain a
+session after local silence begins. Other processes, devices, and clients are
+outside this tool's control. Offline tests cannot establish server-side protection.
 
 ## Contributing
 

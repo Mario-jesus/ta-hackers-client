@@ -3,15 +3,39 @@ on: push
 
 jobs:
   rspec:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      BUNDLE_PATH: ${{ github.workspace }}/.bundle/native-readline
+      BUNDLE_APP_CONFIG: ${{ github.workspace }}/.bundle
+      BUNDLE_FROZEN: 'true'
     steps:
       - name: checkout
         uses: actions/checkout@v2
       - name: setup-ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: 2.7
-      - name: bundler
-        run: bundle install
+          ruby-version: '3.3.12'
+          bundler: '2.5.22'
+      - name: Install locked gems
+        run: bundle _2.5.22_ install
+      - name: Native build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y build-essential libncurses-dev libreadline-dev
+      - name: Build GNU Readline 8.3 locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .bundle/readline-source
+          cd .bundle/readline-source
+          curl --fail --location --silent --show-error https://ftp.gnu.org/gnu/readline/readline-8.3.tar.gz -o readline-8.3.tar.gz
+          echo 'fe5383204467828cd495ee8d1d3c037a7eba1389c22bc6a041f627976f9061cc  readline-8.3.tar.gz' | sha256sum --check --strict
+          tar -xzf readline-8.3.tar.gz
+          cd readline-8.3
+          ./configure --prefix="$GITHUB_WORKSPACE/.bundle/gnu-readline-8.3" --with-curses
+          make -j2 SHLIB_LIBS=-ltinfo
+          make SHLIB_LIBS=-ltinfo install
+      - name: Build native callback
+        env:
+          READLINE_PREFIX: ${{ github.workspace }}/.bundle/gnu-readline-8.3
+        run: bundle exec ruby scripts/build_cli_readline_callback.rb
       - name: rspec
         run: bundle exec rspec

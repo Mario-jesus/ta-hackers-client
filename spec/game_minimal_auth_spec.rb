@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'hackers'
+require 'timeout'
 
 # Offline tests for the minimal authentication path (task C1).
 #
@@ -61,6 +62,92 @@ RSpec.describe Hackers::Game do
       expect(game.api.sid).to be_nil
       expect(game.session_active?).to be(false)
       expect(requests.length).to eq(1)
+    end
+  end
+
+  describe 'authentication commit draining' do
+    %i[auth_minimal auth].each do |method|
+      it "balances nested admissions when #{method} is killed during transport" do
+        client = game.api.client
+        allow(client).to receive(:request_raw).and_call_original
+        entered, release, drained = Queue.new, Queue.new, Queue.new
+        allow_any_instance_of(Net::HTTP).to receive(:started?).and_return(true)
+        expect_any_instance_of(Net::HTTP).to receive(:get).once do
+          entered << true
+          release.pop
+        end
+        outsider = Thread.new { game.public_send(method) }
+        entered.pop(timeout: 2)
+        owner = Thread.new do
+          client.with_session_cycle { client.with_session_pause { drained << true } }
+        end
+        Timeout.timeout(2) { Thread.pass until client.session_paused? }
+        outsider.kill.join
+        expect(drained.pop(timeout: 2)).to be(true)
+        owner.value
+        expect(game.api.sid).to be_nil
+        expect(client.session_paused?).to be(false)
+        client.with_session_cycle { client.with_session_pause {} }
+      ensure
+        outsider&.kill&.join
+        owner&.kill&.join
+      end
+
+      it "rejects #{method} during silence before HTTP or state mutation" do
+        game.api.client.with_session_cycle do
+          game.api.client.with_session_pause do
+            expect { game.public_send(method) }.to raise_error(Hackers::RequestError, /paused/)
+            expect(requests).to be_empty
+            expect(game.api.sid).to be_nil
+            expect(game.player.tutorial).to be_nil
+            expect(game.missions.data).to be_nil
+          end
+        end
+      end
+
+      it "drains #{method} parsing before silence and prevents a stale SID overwriting recovery" do
+        entered, release, silent, finish = Queue.new, Queue.new, Queue.new, Queue.new
+        client = game.api.client
+        original_parse = Hackers::Serializer.method(:parseData)
+        start = Queue.new
+        allow(client).to receive(:request_raw) do |params, **_kwargs|
+          requests << params.dup
+          AUTH_PAYLOAD.sub('SIDTEST123', requests.length == 1 ? 'STALE' : 'RECOVERED')
+        end
+        outsider = nil
+        allow(Hackers::Serializer).to receive(:parseData) do |payload|
+          if Thread.current == outsider
+            entered << true
+            release.pop
+          end
+          original_parse.call(payload)
+        end
+        outsider = Thread.new { start.pop; game.public_send(method) }
+        start << true
+        entered.pop(timeout: 2)
+        owner = Thread.new do
+          client.with_session_cycle do
+            client.with_session_pause do |recover|
+              game.api.sid = nil
+              recover.call { game.public_send(method) }
+              silent << game.api.sid
+              finish.pop
+            end
+          end
+        end
+        Timeout.timeout(2) { Thread.pass until client.session_paused? }
+        expect(silent.empty?).to be(true)
+        release << true
+        outsider.value
+        expect(silent.pop(timeout: 2)).to eq('RECOVERED')
+        expect(game.api.sid).to eq('RECOVERED')
+        finish << true
+        owner.value
+        expect(requests.length).to eq(2)
+      ensure
+        outsider&.kill&.join
+        owner&.kill&.join
+      end
     end
   end
 

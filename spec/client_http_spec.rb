@@ -161,7 +161,11 @@ RSpec.describe 'Hackers::Client HTTP compatibility' do
       expect(uri).to eq("#{unsigned}&cmd_id=#{synthetic_cmd_id(unsigned)}")
     end
 
-    it 'canonicalizes chat_send message spaces on the signed and sent URI without raw concatenation' do
+    ##
+    # The native chat builder pre-escapes the message with Uri.EscapeDataString
+    # before the URI is canonicalized, so message colons stay percent encoded
+    # while last_message colons remain raw in the Uri.AbsoluteUri form.
+    it 'native-escapes the chat_send message on the signed and sent URI without raw concatenation' do
       client = Hackers::Client.new('127.0.0.1', 1, false, '/req.php', 'spec-salt', true, 1)
       uri = client.generate_uri_cmd(
         'chat_send' => nil,
@@ -172,7 +176,7 @@ RSpec.describe 'Hackers::Client HTTP compatibility' do
         'app_version' => 1229,
         'session_id' => 'SID1'
       )
-      unsigned = '/req.php?chat_send&room=999&last_message=2026-10-05%2020:47:09.177&message=space%20plus%2B%20amp%26%20percent%25%20unicode%E2%9C%93%20colon:%20done&id_player=42&app_version=1229&session_id=SID1'
+      unsigned = '/req.php?chat_send&room=999&last_message=2026-10-05%2020:47:09.177&message=space%20plus%2B%20amp%26%20percent%25%20unicode%E2%9C%93%20colon%3A%20done&id_player=42&app_version=1229&session_id=SID1'
 
       expect(uri).to eq("#{unsigned}&cmd_id=#{synthetic_cmd_id(unsigned)}")
     end
@@ -182,6 +186,301 @@ RSpec.describe 'Hackers::Client HTTP compatibility' do
       params = { 'check_connectivity' => 1, 'value' => 'space colon: plus+ amp& percent% unicode✓' }
 
       expect(client.generate_uri_raw(params)).to eq("/req.php?#{URI.encode_www_form(params)}")
+    end
+  end
+
+  describe 'chat message native escaping' do
+    ##
+    # Offline .NET 8 synthetic oracle: each message pre-escaped with
+    # Uri.EscapeDataString and then canonicalized by Uri.AbsoluteUri, with the
+    # documented salt/MD5 signature. All credentials below are synthetic.
+    #
+    # Honesty boundary: the oracle encodes the RFC 3986 escape stage exactly.
+    # Oracle messages containing a literal `!` keep `%21` and messages
+    # containing a literal `*` keep `%2A` in the oracle wire form because
+    # modern .NET 8 canonicalization does not expose them; controlled backend
+    # evidence requires the opposite in the final signed wire bytes, so the
+    # final URI/signature assertions for those entries use the explicitly
+    # documented backend-compatible variant.
+    NATIVE_REFERENCE = [
+      {
+        message: 'Prueba CLI: ¡Hola! ¿Cómo estás? Aquí.',
+        path: '/req.php?chat_send&room=69&last_message=&message=Prueba%20CLI%3A%20%C2%A1Hola%21%20%C2%BFC%C3%B3mo%20est%C3%A1s%3F%20Aqu%C3%AD.&id_player=42&app_version=1229&session_id=OFFLINE',
+        signature: 'dFlYafOZ'
+      },
+      {
+        message: '[c][FFFFFF]Test [b][c][fd3421]Test A*BC [u]CLICK[/u]',
+        path: '/req.php?chat_send&room=69&last_message=&message=%5Bc%5D%5BFFFFFF%5DTest%20%5Bb%5D%5Bc%5D%5Bfd3421%5DTest%20A%2ABC%20%5Bu%5DCLICK%5B%2Fu%5D&id_player=42&app_version=1229&session_id=OFFLINE',
+        signature: 'Uik72AeY'
+      },
+      {
+        message: '[c][FFFFFF]Test [b][c][fd3421]Test A*BC [c][FFFFFF]TEST TEST [b][c][fd3421]¡A B!  [c][0000ff]¿QUIERES SABER CÓMO? >[u]HAZ CLICK AQUÍ[/u]<',
+        path: '/req.php?chat_send&room=69&last_message=&message=%5Bc%5D%5BFFFFFF%5DTest%20%5Bb%5D%5Bc%5D%5Bfd3421%5DTest%20A%2ABC%20%5Bc%5D%5BFFFFFF%5DTEST%20TEST%20%5Bb%5D%5Bc%5D%5Bfd3421%5D%C2%A1A%20B%21%20%20%5Bc%5D%5B0000ff%5D%C2%BFQUIERES%20SABER%20C%C3%93MO%3F%20%3E%5Bu%5DHAZ%20CLICK%20AQU%C3%8D%5B%2Fu%5D%3C&id_player=42&app_version=1229&session_id=OFFLINE',
+        signature: 'ygjJQfuS'
+      },
+      {
+        message: 'áéíóúñ',
+        path: '/req.php?chat_send&room=69&last_message=&message=%C3%A1%C3%A9%C3%AD%C3%B3%C3%BA%C3%B1&id_player=42&app_version=1229&session_id=OFFLINE',
+        signature: '2JIR7WqW'
+      },
+      {
+        message: '! ¡? ¿',
+        path: '/req.php?chat_send&room=69&last_message=&message=%21%20%C2%A1%3F%20%C2%BF&id_player=42&app_version=1229&session_id=OFFLINE',
+        signature: '5XOPxUd4'
+      },
+      {
+        message: 'emoji 😀',
+        path: '/req.php?chat_send&room=69&last_message=&message=emoji%20%F0%9F%98%80&id_player=42&app_version=1229&session_id=OFFLINE',
+        signature: 'lG_y4eL5'
+      }
+    ].freeze
+
+    ##
+    # Builds the client configuration used by the native oracle reference
+    def native_client
+      Hackers::Client.new('localhost', 1, false, '/req.php', 'offline-test-salt', false, 1)
+    end
+
+    ##
+    # Builds the chat_send params used by the native oracle reference
+    def native_params(message)
+      {
+        'chat_send' => nil,
+        'room' => 69,
+        'last_message' => '',
+        'message' => message,
+        'id_player' => 42,
+        'app_version' => 1229,
+        'session_id' => 'OFFLINE'
+      }
+    end
+
+    ##
+    # Oracle reference entries whose messages contain no literal `!` or `*`
+    def plain_entries
+      NATIVE_REFERENCE.reject { |entry| entry.fetch(:message).include?('!') || entry.fetch(:message).include?('*') }
+    end
+
+    ##
+    # Oracle reference entries whose messages contain a literal `!` or `*`
+    def punctuated_entries
+      NATIVE_REFERENCE.select { |entry| entry.fetch(:message).include?('!') || entry.fetch(:message).include?('*') }
+    end
+
+    ##
+    # Extracts the encoded message component of an oracle wire path
+    def message_component(path)
+      URI(path).query.split('&').find { |segment| segment.start_with?('message=') }.delete_prefix('message=')
+    end
+
+    ##
+    # Derives the backend-compatible final wire form independently of
+    # production code: percent-bang and percent-asterisk escapes inside the
+    # message field only are exposed as literal characters, per controlled
+    # same-account backend evidence for the observed punctuation shapes.
+    def backend_compat_punctuated_path(path)
+      path.split('&').map do |segment|
+        segment.start_with?('message=') ? segment.gsub(/%21|%2A/, '%21' => '!', '%2A' => '*') : segment
+      end.join('&')
+    end
+
+    it 'escapes message colons natively while last_message colons stay raw' do
+      client = native_client
+      uri = client.generate_uri_raw(
+        'chat_send' => nil,
+        'room' => 69,
+        'last_message' => '2026-10-05 20:47:09.177',
+        'message' => 'colon: done',
+        'id_player' => 42,
+        'app_version' => 1229,
+        'session_id' => 'OFFLINE'
+      )
+
+      expect(uri).to eq(
+        '/req.php?chat_send&room=69&last_message=2026-10-05%2020:47:09.177&message=colon%3A%20done&id_player=42&app_version=1229&session_id=OFFLINE'
+      )
+    end
+
+    it 'matches the native reference for the message escape stage' do
+      client = native_client
+
+      NATIVE_REFERENCE.each do |entry|
+        stage = client.send(:escape_chat_message, entry.fetch(:message))
+
+        expect(stage).to eq(message_component(entry.fetch(:path)))
+      end
+    end
+
+    it 'keeps the native reference URI and signature for oracle messages without a bang or asterisk' do
+      client = native_client
+
+      plain_entries.each do |entry|
+        signed = client.generate_uri_cmd(native_params(entry.fetch(:message)))
+
+        expect(signed).to eq("#{entry.fetch(:path)}&cmd_id=#{entry.fetch(:signature)}")
+      end
+    end
+
+    it 'exposes the backend-compatible literal bang and star in the final wire URI for punctuated oracle messages' do
+      client = native_client
+
+      punctuated_entries.each do |entry|
+        expect(client.generate_uri_raw(native_params(entry.fetch(:message))))
+          .to eq(backend_compat_punctuated_path(entry.fetch(:path)))
+      end
+    end
+
+    it 'escapes query injection characters like the native builder' do
+      client = native_client
+      uri = client.generate_uri_raw(native_params('plus+ amp& percent% hash# quest?'))
+
+      expect(uri).to eq(
+        '/req.php?chat_send&room=69&last_message=&message=plus%2B%20amp%26%20percent%25%20hash%23%20quest%3F&id_player=42&app_version=1229&session_id=OFFLINE'
+      )
+    end
+
+    it 'signs the backend-compatible punctuated wire URI for oracle messages containing a bang or asterisk' do
+      client = native_client
+
+      punctuated_entries.each do |entry|
+        uri = client.generate_uri_cmd(native_params(entry.fetch(:message)))
+        punctuated_path = backend_compat_punctuated_path(entry.fetch(:path))
+
+        expect(uri).to eq("#{punctuated_path}&cmd_id=#{synthetic_cmd_id(punctuated_path, 'offline-test-salt')}")
+        expect(synthetic_cmd_id(punctuated_path, 'offline-test-salt')).not_to eq(entry.fetch(:signature))
+      end
+    end
+
+    it 'round-trips the native message encoding back to the original text' do
+      client = native_client
+
+      NATIVE_REFERENCE.each do |entry|
+        raw = client.generate_uri_raw(native_params(entry.fetch(:message)))
+        decoded = URI.decode_www_form(URI(raw).query).to_h.fetch('message')
+
+        expect(decoded).to eq(entry.fetch(:message))
+        expect(decoded.valid_encoding?).to be(true)
+      end
+    end
+
+    it 'exposes repeated and accented bangs literally in dedicated chat messages' do
+      client = native_client
+      double_bang = 'Prueba doble!! ¡!'
+      accented = '¡Acentuada!'
+
+      expect(client.generate_uri_raw(native_params(double_bang)))
+        .to eq('/req.php?chat_send&room=69&last_message=&message=Prueba%20doble!!%20%C2%A1!&id_player=42&app_version=1229&session_id=OFFLINE')
+      expect(client.generate_uri_raw(native_params(accented)))
+        .to eq('/req.php?chat_send&room=69&last_message=&message=%C2%A1Acentuada!&id_player=42&app_version=1229&session_id=OFFLINE')
+    end
+
+    it 'signs dedicated bang messages identically on both hash passes' do
+      client = native_client
+      unsigned = '/req.php?chat_send&room=69&last_message=&message=Prueba%20doble!!%20%C2%A1!&id_player=42&app_version=1229&session_id=OFFLINE'
+
+      expect(client.generate_uri_cmd(native_params('Prueba doble!! ¡!')))
+        .to eq("#{unsigned}&cmd_id=#{synthetic_cmd_id(unsigned, 'offline-test-salt')}")
+    end
+
+    it 'escapes mixed punctuation with only bangs exposed literally' do
+      client = native_client
+
+      expect(client.generate_uri_raw(native_params('A!B?C#D&E')))
+        .to eq('/req.php?chat_send&room=69&last_message=&message=A!B%3FC%23D%26E&id_player=42&app_version=1229&session_id=OFFLINE')
+    end
+
+    ##
+    # User-probed asterisk message from the controlled backend evidence round;
+    # the modern-wire signature is asserted different, never equal.
+    it 'exposes the user-probed literal asterisk with its independently derived signature' do
+      client = native_client
+      modern = '/req.php?chat_send&room=69&last_message=&message=A%2AB&id_player=42&app_version=1229&session_id=OFFLINE'
+      final = '/req.php?chat_send&room=69&last_message=&message=A*B&id_player=42&app_version=1229&session_id=OFFLINE'
+
+      expect(client.generate_uri_raw(native_params('A*B'))).to eq(final)
+      expect(client.generate_uri_cmd(native_params('A*B')))
+        .to eq("#{final}&cmd_id=#{synthetic_cmd_id(final, 'offline-test-salt')}")
+      expect(synthetic_cmd_id(final, 'offline-test-salt')).not_to eq(synthetic_cmd_id(modern, 'offline-test-salt'))
+    end
+
+    it 'exposes repeated asterisks with bangs in dedicated messages' do
+      client = native_client
+
+      expect(client.generate_uri_raw(native_params('A**B C*!')))
+        .to eq('/req.php?chat_send&room=69&last_message=&message=A**B%20C*!&id_player=42&app_version=1229&session_id=OFFLINE')
+    end
+
+    it 'exposes mixed asterisks bangs and accents literally together' do
+      client = native_client
+
+      expect(client.generate_uri_raw(native_params('¡A*B!')))
+        .to eq('/req.php?chat_send&room=69&last_message=&message=%C2%A1A*B!&id_player=42&app_version=1229&session_id=OFFLINE')
+    end
+
+    ##
+    # A literal `%2A`/`%21` user string is percent-escaped itself and must stay
+    # escaped; only real percent-bang and percent-asterisk escape tokens from
+    # the RFC 3986 stage are exposed.
+    it 'preserves literal percent-marked escape sequences in user text' do
+      client = native_client
+
+      expect(client.generate_uri_raw(native_params('A%2AB')))
+        .to eq('/req.php?chat_send&room=69&last_message=&message=A%252AB&id_player=42&app_version=1229&session_id=OFFLINE')
+      expect(client.generate_uri_raw(native_params('A%21!')))
+        .to eq('/req.php?chat_send&room=69&last_message=&message=A%2521!&id_player=42&app_version=1229&session_id=OFFLINE')
+    end
+
+    it 'keeps injection punctuation escaped with only observed shapes exposed' do
+      client = native_client
+
+      expect(client.generate_uri_raw(native_params('A*B?C#D&E')))
+        .to eq('/req.php?chat_send&room=69&last_message=&message=A*B%3FC%23D%26E&id_player=42&app_version=1229&session_id=OFFLINE')
+    end
+
+    ##
+    # Ruby form encoding already leaves a literal `*` raw in non-message
+    # fields; this correction must not change non-message or non-chat stars.
+    it 'keeps non-message chat field stars in the plain canonical form' do
+      client = native_client
+      uri = client.generate_uri_raw(
+        'chat_display' => nil, 'room' => 999, 'last_message' => '', 'filter' => 'star* filter',
+        'app_version' => 1229, 'session_id' => 'OFFLINE'
+      )
+
+      expect(uri).to eq('/req.php?chat_display&room=999&last_message=&filter=star*%20filter&app_version=1229&session_id=OFFLINE')
+    end
+
+    it 'decodes the canonical bang wire form back to the original text' do
+      client = native_client
+
+      ['Prueba doble!! ¡!', 'A!B?C#D&E', '¡Acentuada!'].each do |message|
+        raw = client.generate_uri_raw(native_params(message))
+        decoded = URI.decode_www_form(URI(raw).query).to_h.fetch('message')
+
+        expect(decoded).to eq(message)
+      end
+    end
+
+    it 'keeps escaped bangs in non-message chat fields' do
+      client = native_client
+      uri = client.generate_uri_raw(
+        'chat_display' => nil, 'room' => 999, 'last_message' => '', 'filter' => 'aux! filter',
+        'app_version' => 1229, 'session_id' => 'OFFLINE'
+      )
+
+      expect(uri).to eq('/req.php?chat_display&room=999&last_message=&filter=aux%21%20filter&app_version=1229&session_id=OFFLINE')
+    end
+
+    it 'keeps plain form encoding for a message key outside chat requests' do
+      client = native_client
+
+      expect(client.generate_uri_raw('report_create' => '', 'message' => 'colon: done'))
+        .to eq("/req.php?#{URI.encode_www_form('report_create' => '', 'message' => 'colon: done')}")
+      expect(client.generate_uri_raw('report_create' => '', 'message' => 'bang!'))
+        .to include('message=bang%21')
+      expect(client.generate_uri_raw('report_create' => '', 'message' => 'A*B!'))
+        .to include('message=A*B%21')
+      expect(URI.decode_www_form('message=colon%3A+done')).to include(['message', 'colon: done'])
     end
   end
 
