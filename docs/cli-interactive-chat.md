@@ -2,6 +2,73 @@
 
 The T0a lifecycle change removes a failed or stopped poller from the local room registry and closes only the room it still owns. It does **not** fix interactive terminal redraw: the installed SDK can still raise `NoMethodError` when `Readline` resolves to Reline without `refresh_line`.
 
+## Reproducible native build and tests
+
+Use Ruby **3.3.12**, Bundler **2.5.22**, a C compiler, `make`, and GNU
+Readline **8.3**. Ubuntu 24.04's system Readline alone is insufficient: both
+the native module and loader require 8.3 exactly. CI builds the pinned official
+release into a workspace-local prefix; no global Readline replacement is needed.
+Pass `SHLIB_LIBS=-ltinfo` to both build and install: Readline's Linux shared-library
+recipe does not automatically link the termcap symbols merely because configure
+received `--with-curses`. Ubuntu's `libncurses-dev` supplies the `libtinfo` linker
+library; explicitly linking it makes the private Readline self-contained with
+respect to its terminal-capability dependency.
+The archive SHA256 below is corroborated by the
+[Buildroot package hash](https://github.com/buildroot/buildroot/blob/master/package/readline/readline.hash)
+and the release is listed in the
+[GNU announcement](https://lists.gnu.org/archive/html/bug-readline/2025-07/msg00004.html).
+
+From the repository root, with the specified Ruby and Bundler already available:
+
+```bash
+# Ubuntu platform prerequisites (not Ruby/application dependencies):
+sudo apt-get update && sudo apt-get install -y build-essential libncurses-dev libreadline-dev
+export BUNDLE_PATH="$PWD/.bundle/native-readline"
+export BUNDLE_APP_CONFIG="$PWD/.bundle"
+export BUNDLE_FROZEN=true
+bundle _2.5.22_ install
+
+# Download and verify before extracting; all products remain ignored/local.
+set -euo pipefail
+export READLINE_PREFIX="$PWD/.bundle/gnu-readline-8.3"
+mkdir -p .bundle/readline-source
+(
+  cd .bundle/readline-source
+  curl --fail --location --silent --show-error https://ftp.gnu.org/gnu/readline/readline-8.3.tar.gz -o readline-8.3.tar.gz
+  echo 'fe5383204467828cd495ee8d1d3c037a7eba1389c22bc6a041f627976f9061cc  readline-8.3.tar.gz' | sha256sum --check --strict
+  tar -xzf readline-8.3.tar.gz
+  cd readline-8.3
+  ./configure --prefix="$READLINE_PREFIX" --with-curses
+  make -j2 SHLIB_LIBS=-ltinfo
+  make SHLIB_LIBS=-ltinfo install
+)
+bundle _2.5.22_ exec ruby scripts/build_cli_readline_callback.rb
+bundle _2.5.22_ exec rspec
+```
+
+Keep the bundle path above for full-suite reproduction: existing entrypoint PTY
+fixtures launch child processes with `.bundle/native-readline` and Ruby's
+`ruby/3.3.0` gem ABI directory. Installing gems only in an external bundle or
+`vendor/bundle` leaves those children without their dependencies. CI therefore
+uses an explicit frozen install at this path, not setup-ruby's `bundler-cache`.
+
+The builder derives the checkout location from its own file, requires invocation
+from that root and Ruby 3.3.12, and accepts no arguments. `READLINE_PREFIX` is
+optional only if the toolchain already supplies GNU Readline 8.3. When supplied,
+it must be an absolute existing directory: the builder passes it to mkmf through
+`--with-readline-dir` and embeds its library directory as an RPATH, so the
+callback can load that private library without global linker configuration.
+A fresh subprocess checks the built module's actual Readline version and fails
+unless it is 8.3. Build failures do not select another terminal backend.
+
+The output is `.bundle/native-readline-callback/cli_readline_callback` plus the
+platform shared-library extension. No prebuilt artifact is tracked: rebuild after
+pulling native source changes or changing Ruby/toolchains. The builder checks
+source and output paths for symlinks; it deliberately does not recursively scan
+Bundler gems or the Readline installation (shared-library symlinks are normal).
+CI builds this artifact before the **unchanged full RSpec suite**. The commands
+above describe reproduction, not evidence of a completed clean CI run.
+
 ## Lifecycle contract
 
 | Event | Local outcome |
@@ -31,7 +98,7 @@ The parent read the received public legacy chat source: it likewise lacks ensure
 
 A standalone C module (`ext/cli_readline_callback/`) binds the documented public GNU Readline 8.3 callback APIs without loading `readline-ext` or touching SDK private state. One UI owner uses `CliReadlineCallback.install/read_char/emit_message/remove` (plus `session`, `buffer`, `point`, `version`): C-owned callback data (line/EOF records, cancellation pipe), Ruby objects created only under the GVL, native blocking reads released via `rb_thread_call_without_gvl` with a signal-safe unblock, and ownership/GV/GC/exactly-once-free/EOF/exception-interrupt cleanup enforced in C. Producers must not write the terminal while editing; `emit_message` clears the visible line, prints, and relies on the owner's single `redisplay`.
 
-Build locally with `ruby scripts/build_cli_readline_callback.rb` through the project toolchain launcher; artifacts stay under ignored `.bundle/native-readline-callback/` (extconf finds `rl_callback_handler_install` in `-lreadline`; GNU 8.3 version is asserted at install). `spec/cli_readline_callback_spec.rb` covers the contract, lifecycle and a real-PTY display gate; see `odd/tasks/cli-authenticated-chat-tests.md` for observed counts. The historical 5-examples/4-failures run before any edit is a harness RED, not behavioral test-first proof for the native module: the original native product RED is unavailable because the resumed writer inherited the already-written partial C source and checked it as-is (no native code was deleted or reverted to fabricate one). All four failures were fixture/model defects — the unstable `IO::ConsoleMode#==` restore comparison and the screen model missing ECMA-48 ICH/DCH/ECH — and the native module needed no change for them. An independent verifier reproduced focused 5/0, the 124/0 focused CLI/API set, the 1001/0 full suite and the true midframe barrier (4096 of 180316 output bytes drained with the frame still owned), then found one latent screen-model defect: ECH truncated the untouched tail beyond the erased span; the real PTY stream never emits it, so the gate itself stayed valid. A dedicated pure-model regression was added, observed RED (destroyed tail, collapsed row width), and the model corrected; unknown ANSI remains fatal, and ICH/DCH/ECH clipping, unchanged width/cursor and preserved tails are now pinned. GREEN is 11/0 complete callback spec (5 PTY gate + 6 model) and the full suite reported in the feature tracker; helpers pass 24+10 offline self-tests. Prototype limitation: `emit_message` holds the GVL while its `fputs` output may block on PTY capacity — T0b2 must evaluate edit responsiveness/streaming separately; no native change or integration is authorized at prototype scope.
+Build locally using the [portable build commands above](#reproducible-native-build-and-tests); artifacts stay under ignored `.bundle/native-readline-callback/` (extconf finds `rl_callback_handler_install` in `-lreadline`; GNU 8.3 version is asserted at install). `spec/cli_readline_callback_spec.rb` covers the contract, lifecycle and a real-PTY display gate; see `odd/tasks/cli-authenticated-chat-tests.md` for observed counts. The historical 5-examples/4-failures run before any edit is a harness RED, not behavioral test-first proof for the native module: the original native product RED is unavailable because the resumed writer inherited the already-written partial C source and checked it as-is (no native code was deleted or reverted to fabricate one). All four failures were fixture/model defects — the unstable `IO::ConsoleMode#==` restore comparison and the screen model missing ECMA-48 ICH/DCH/ECH — and the native module needed no change for them. An independent verifier reproduced focused 5/0, the 124/0 focused CLI/API set, the 1001/0 full suite and the true midframe barrier (4096 of 180316 output bytes drained with the frame still owned), then found one latent screen-model defect: ECH truncated the untouched tail beyond the erased span; the real PTY stream never emits it, so the gate itself stayed valid. A dedicated pure-model regression was added, observed RED (destroyed tail, collapsed row width), and the model corrected; unknown ANSI remains fatal, and ICH/DCH/ECH clipping, unchanged width/cursor and preserved tails are now pinned. GREEN is 11/0 complete callback spec (5 PTY gate + 6 model) and the full suite reported in the feature tracker; helpers pass 24+10 offline self-tests. Prototype limitation: `emit_message` holds the GVL while its `fputs` output may block on PTY capacity — T0b2 must evaluate edit responsiveness/streaming separately; no native change or integration is authorized at prototype scope.
 
 Not injected into the production shell. Still unproved: colored/wide-Unicode/grapheme prompts, resize, input history, post-unwind edit snapshots, and real SDK/Reline parity (T0b2 must map and prove that separately); PTY display assertions above were, and remain, the gate for any integration claim. No other file, dependency, configuration or server surface was touched.
 

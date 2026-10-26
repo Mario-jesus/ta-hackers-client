@@ -28,9 +28,18 @@ Clone the repository to your local machine and prepare the environment:
 ```console
 git clone https://github.com/animotto/ta-hackers
 cd ta-hackers
-bundle install
+# Use Ruby 3.3.12 and Bundler 2.5.22.
+export BUNDLE_PATH="$PWD/.bundle/native-readline"
+export BUNDLE_APP_CONFIG="$PWD/.bundle"
+export BUNDLE_FROZEN=true
+bundle _2.5.22_ install
 export RUBYLIB=$PWD/lib
 ```
+
+Before interactive use, [build the native callback with GNU Readline 8.3](docs/cli-interactive-chat.md#reproducible-native-build-and-tests).
+The ignored native artifact is not delivered by Git: rebuild it after pulling
+native source changes or changing Ruby/toolchains. Batch/non-TTY use does not
+load this editor.
 
 Create a new account and write the credentials to the config named *my*:
 ```console
