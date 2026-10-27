@@ -1,6 +1,6 @@
 # Trickster Arts Hackers reverse engineering
-![GitHub](https://img.shields.io/github/license/animotto/ta-hackers)
-[![Tests](https://github.com/animotto/ta-hackers/actions/workflows/tests.yml/badge.svg)](https://github.com/animotto/ta-hackers/actions/workflows/tests.yml)
+![GitHub](https://img.shields.io/github/license/Mario-jesus/ta-hackers-client)
+[![Tests](https://github.com/Mario-jesus/ta-hackers-client/actions/workflows/tests.yml/badge.svg)](https://github.com/Mario-jesus/ta-hackers-client/actions/workflows/tests.yml)
 
 ## Overview
 This tool provides a sandbox for researching of the network API of the Hackers mobile game, originally developed by Trickster Arts
@@ -26,8 +26,8 @@ The sandbox consists of the following contexts:
 
 Clone the repository to your local machine and prepare the environment:
 ```console
-git clone https://github.com/animotto/ta-hackers
-cd ta-hackers
+git clone https://github.com/Mario-jesus/ta-hackers-client.git
+cd ta-hackers-client
 # Use Ruby 3.3.12 and Bundler 2.5.22.
 export BUNDLE_PATH="$PWD/.bundle/native-readline"
 export BUNDLE_APP_CONFIG="$PWD/.bundle"
@@ -50,6 +50,101 @@ Run the sandbox with the config *my*:
 ```console
 ./bin/sandbox -c my
 ```
+
+## Install and run on Termux (experimental)
+
+Run these commands **inside Termux on Android**, not on your desktop. Keep the
+checkout under Termux's home directory (`$HOME`), rather than shared storage such
+as `/sdcard`. The desktop `mise` launcher and `env-ruby33.sh` are not required.
+
+**Compatibility:** the reference toolchain is Ruby 3.3.12 with GNU Readline 8.3.
+Termux may provide a different Ruby version, and these instructions have not been
+validated on Android. The interactive editor still requires GNU Readline 8.3;
+do not remove its version check to work around a load error.
+
+### 1. Install system tools and Ruby dependencies
+
+```bash
+pkg update
+pkg upgrade
+pkg install git ruby clang make pkg-config readline
+gem install bundler --no-document
+```
+
+If you already cloned the repository into `~/ta-hackers-client`, enter it directly.
+Otherwise, clone it first:
+
+```bash
+git clone https://github.com/Mario-jesus/ta-hackers-client.git "$HOME/ta-hackers-client"
+cd ~/ta-hackers-client
+```
+
+From the repository root, install the gems:
+
+```bash
+unset BUNDLE_FROZEN BUNDLE_DEPLOYMENT
+bundle update --bundler
+bundle add base64 readline net-http
+bundle install
+```
+
+This updates your local `Gemfile` and `Gemfile.lock`: newer Ruby releases may no
+longer provide these libraries implicitly. It is a Termux setup adjustment, not
+the frozen reference-toolchain installation described above.
+
+### 2. Build and verify the native terminal editor
+
+The native artifact is not included in Git and must be built on the phone. The
+project's build helper requires Ruby 3.3.12; for the experimental Termux runtime,
+configure and compile the extension directly in its ignored build directory:
+
+```bash
+mkdir -p .bundle/native-readline-callback
+cp ext/cli_readline_callback/extconf.rb \
+   ext/cli_readline_callback/cli_readline_callback.c \
+   .bundle/native-readline-callback/
+
+(
+  cd .bundle/native-readline-callback &&
+  ruby extconf.rb --with-readline-dir="$PREFIX" &&
+  make
+)
+```
+
+Verify the editor without connecting to the game:
+
+```bash
+bundle exec ruby -Ilib -rsandbox -rcli/interactive_shell \
+  -e 'Sandbox::InteractiveShell.load_native; puts "Native editor OK"'
+```
+
+Continue only if this prints `Native editor OK`. If compilation or loading fails,
+retain the error and check `ruby -v` and the installed Readline version before
+proceeding. Rebuild after changing Ruby or pulling native source changes. A
+successful load is not proof of full Android terminal compatibility.
+
+### 3. Start with an existing account
+
+For a configuration named `apple`, securely copy your existing account file to
+`configs/apple.conf` if it is not already present. Cloning the repository does
+not guarantee that your private credentials are included. Do not publish them.
+
+```bash
+ls configs/apple.conf
+chmod 600 configs/apple.conf
+bundle exec ruby bin/sandbox -a -m -c apple
+```
+
+At the sandbox prompt, connect explicitly:
+
+```text
+connect
+```
+
+`-a` disables automatic configuration commands, `-m` selects minimal
+authentication, and `-c apple` loads `configs/apple.conf`. This uses the existing
+account; it does not create a new one. On subsequent launches, run the same
+`bundle exec ruby bin/sandbox -a -m -c apple` command from the repository root.
 
 ## Anti-AFK session cycle
 
