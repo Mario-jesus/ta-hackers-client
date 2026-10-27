@@ -41,15 +41,107 @@ The ignored native artifact is not delivered by Git: rebuild it after pulling
 native source changes or changing Ruby/toolchains. Batch/non-TTY use does not
 load this editor.
 
-Create a new account and write the credentials to the config named *my*:
-```console
-./bin/sandbox -n my
+Next, [configure an account](#account-configuration) before connecting.
+
+## Account configuration
+
+Configuration files contain JSON, even though their extension is `.conf`.
+`configs/default.conf` is the public template: its `id: 0` and empty `password`
+are placeholders, not usable credentials. The default platform is `apple`.
+Keep the server settings from the template unless you know they must change.
+
+### Create a new account
+
+To create a new game account and automatically save its ID and password in
+`configs/my.conf`, run this from the repository root:
+
+```bash
+bundle exec ruby bin/sandbox -n my
+chmod 600 configs/my.conf
 ```
 
-Run the sandbox with the config *my*:
-```console
-./bin/sandbox -c my
+This contacts the server and creates a real account; do not use it merely to
+open an existing account. It copies the default settings and refuses to overwrite
+an existing configuration with the same name.
+
+Alternatively, the sandbox command `new` creates an account and **prints** its
+ID, password, and session ID:
+
+```text
+new
 ```
+
+Unlike `-n my`, `new` does not save a configuration or switch the running session
+to the new account. Save the returned **ID and Password** in a private config as
+described below, then restart with that config. A session ID is temporary and
+does not replace those credentials.
+
+### Link an existing account with `cpuse`
+
+Use a platform-change code belonging to an account you own. An already
+authenticated client can generate one with `cpgen`. Treat the code as a secret.
+`cpuse` requires a connected sandbox session; it cannot run against the empty
+default credentials.
+
+If you have no working sandbox account yet, create a temporary one first:
+
+```bash
+bundle exec ruby bin/sandbox -n bootstrap
+chmod 600 configs/bootstrap.conf
+bundle exec ruby bin/sandbox -a -m -c bootstrap
+```
+
+At the sandbox prompt, connect and redeem your code for the target platform:
+
+```text
+connect
+cpuse YOUR_PLATFORM_CHANGE_CODE apple
+```
+
+Replace `YOUR_PLATFORM_CHANGE_CODE` with your actual code. `cpuse` calls the
+platform-change API and prints the linked account's **ID and Password**; it does
+not write them to disk or replace the current session. Save those returned
+credentials in a separate configuration, rather than the bootstrap account's
+credentials. The platform argument must match the target configuration.
+
+### Save credentials and select the configuration
+
+For example, create `configs/apple.conf` from the public template **only if that
+file does not already exist**:
+
+```bash
+cp -n configs/default.conf configs/apple.conf
+chmod 600 configs/apple.conf
+```
+
+Edit `configs/apple.conf` with your preferred text editor. Replace `id` and
+`password` with the values returned by `new` or `cpuse`, keeping valid JSON:
+
+```json
+{
+  "id": 123456789,
+  "password": "REPLACE_WITH_RETURNED_PASSWORD",
+  "platform": "apple"
+}
+```
+
+This is an excerpt, not a replacement for the whole template: preserve its other
+settings. The ID above is only an example; use your returned numeric ID. Leave
+`autocmd` empty if you want to connect manually.
+
+Exit the old sandbox session and start a new one with the saved configuration:
+
+```bash
+bundle exec ruby bin/sandbox -a -m -c apple
+```
+
+Then enter `connect`. `-c apple` resolves to `configs/apple.conf`; `-a` disables
+automatic configuration commands and `-m` uses minimal authentication.
+
+**Keep credentials private.** Never put real credentials in the tracked
+`configs/default.conf`, a README, an issue, or a screenshot. Private account
+configs are ignored by Git, but ignore rules do not protect files already
+tracked; never force-add credential files.
 
 ## Install and run on Termux (experimental)
 
@@ -128,6 +220,8 @@ successful load is not proof of full Android terminal compatibility.
 For a configuration named `apple`, securely copy your existing account file to
 `configs/apple.conf` if it is not already present. Cloning the repository does
 not guarantee that your private credentials are included. Do not publish them.
+If you do not have a configuration yet, follow [Account configuration](#account-configuration)
+to create an account with `new` or link one with `cpuse` and save its credentials.
 
 ```bash
 ls configs/apple.conf
