@@ -261,7 +261,34 @@ without reopening traffic. An in-flight recovery that finishes after the deadlin
 also enters silence immediately; post-silence retries restart at 10 seconds.
 Authentication already in progress is drained through response parsing and local
 state updates before silence starts, so it cannot overwrite a recovered session.
-Logs describe phases without session IDs or credentials.
+
+Every anti-AFK log line starts with the machine's local date, time and UTC
+offset, for example `[2026-11-02 14:05:09 -03:00]`. Logs identify startup,
+authenticated maintenance, scheduled disconnection, reconnection attempts,
+successful recovery and the next retry delay (or the upcoming scheduled pause).
+The failed stage is shown as `authentication` or `player load`.
+`Anti-AFK starting` appears immediately after the job takes ownership;
+`Anti-AFK activated successfully` confirms activation only after authentication
+and player loading succeed. Both messages include their own timestamp. Startup
+failures report their cause and retries without falsely confirming activation.
+
+Diagnostics distinguish observed evidence rather than guessing why a session
+failed:
+
+| Log category | Meaning |
+|--------------|---------|
+| `Network/transport failure` | DNS, timeout, refused/reset connection or another recognized transport error. |
+| `TLS connection failed` | TLS failed; this does not confirm server rejection. |
+| `Server rejected authentication (HTTP 401)` / `Server refused the request (HTTP 403)` | The server returned an explicit HTTP rejection. |
+| `Server rate limited the request (HTTP 429)` | The server explicitly rate limited the request. |
+| `Server returned an error (HTTP 5xx)` | A server error response, not proof that another player entered the network. |
+| `Server reported a protocol rejection` | The game returned a protocol exception; its underlying cause is not inferred. |
+| `cause unconfirmed` | Available error metadata is insufficient to classify the cause. |
+| `Scheduled disconnection` | The intentional three-hour cycle pause, not a network failure. |
+
+Exception descriptions, response bodies, session IDs and credentials are not
+logged. Timestamps use wall-clock time for readability; cycle timing still uses
+the monotonic clock.
 
 **Stopping the job cancels its control:** cleanup releases the traffic gate,
 even during drain, silence, or recovery. This deliberately ends the scheduled

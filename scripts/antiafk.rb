@@ -4,14 +4,32 @@ class Antiafk < Sandbox::Script
   MAINTENANCE_INTERVAL = 60
   ONLINE_INTERVAL = 3 * 60 * 60
   RETRY_MAX = 180
+  TRANSPORT_FAILURES = {
+    'SocketError' => 'DNS lookup failed',
+    'Net::OpenTimeout' => 'connection timed out',
+    'Net::ReadTimeout' => 'response timed out',
+    'Net::WriteTimeout' => 'request write timed out',
+    'Timeout::Error' => 'request timed out',
+    'Errno::ECONNRESET' => 'connection reset',
+    'Errno::ECONNREFUSED' => 'connection refused',
+    'Errno::ETIMEDOUT' => 'connection timed out',
+    'Errno::EHOSTUNREACH' => 'host unreachable',
+    'Errno::ENETUNREACH' => 'network unreachable',
+    'Errno::EPIPE' => 'connection closed while writing',
+    'EOFError' => 'connection closed before the response completed',
+    'IOError' => 'connection input/output failed'
+  }.freeze
 
   def main
     @game.api.client.with_session_cycle do
+      log(:info, 'Anti-AFK starting; checking authentication and player load')
       begin
         maintain_session
-      rescue Hackers::RequestError
+      rescue Hackers::RequestError => error
+        log(:error, "Startup failed during #{@request_stage}: #{failure_reason(error)}; entering exclusive recovery")
         @game.api.client.with_session_pause { |recover| reconnect(recover) }
       end
+      log(:info, "Anti-AFK activated successfully; Authenticated session active; next maintenance in #{MAINTENANCE_INTERVAL} seconds; scheduled disconnection after three hours")
       online_since = monotonic
       loop do
         sleep([MAINTENANCE_INTERVAL, ONLINE_INTERVAL - (monotonic - online_since)].min.clamp(0, MAINTENANCE_INTERVAL))
@@ -21,8 +39,9 @@ class Antiafk < Sandbox::Script
         else
           begin
             maintain_session
-          rescue Hackers::RequestError
-            @logger.error('Authenticated maintenance failed; recovering exclusively')
+            log(:info, "Authenticated maintenance succeeded; next maintenance in #{MAINTENANCE_INTERVAL} seconds")
+          rescue Hackers::RequestError => error
+            log(:error, "Maintenance failed during #{@request_stage}: #{failure_reason(error)}; entering exclusive recovery")
             silenced = false
             @game.api.client.with_session_pause do |recover|
               unless reconnect(recover, deadline: online_since + ONLINE_INTERVAL)
@@ -44,20 +63,51 @@ class Antiafk < Sandbox::Script
     Process.clock_gettime(Process::CLOCK_MONOTONIC)
   end
 
+  # Use static diagnostics only: exception text can contain credentials, URLs,
+  # server response bodies or terminal control characters.
+  def log(level, message)
+    @logger.public_send(level, "[#{Time.now.strftime('%Y-%m-%d %H:%M:%S %:z')}] #{message}")
+  end
+
+  def failure_reason(error)
+    transport = TRANSPORT_FAILURES[error.type]
+    return "Network/transport failure: #{transport}" if transport
+    return 'TLS connection failed; server rejection unconfirmed' if error.type == 'OpenSSL::SSL::SSLError'
+    return 'Server reported a protocol rejection' if error.type == 'Exception'
+
+    status = error.http_status
+    if status.is_a?(Integer) && (100..599).cover?(status)
+      case status
+      when 401 then return 'Server rejected authentication (HTTP 401)'
+      when 403 then return 'Server refused the request (HTTP 403)'
+      when 429 then return 'Server rate limited the request (HTTP 429)'
+      when 500..599 then return "Server returned an error (HTTP #{status})"
+      when 400..499 then return "Server rejected the request (HTTP #{status})"
+      else return "Unexpected server response (HTTP #{status}); cause unconfirmed"
+      end
+    end
+    return 'Invalid authentication response; cause unconfirmed' if error.type == 'Auth'
+    return 'Local tool traffic is paused' if error.type == 'Session'
+
+    'Request failed; cause unconfirmed'
+  end
+
   def maintain_session
+    @request_stage = 'authentication'
     @game.auth_minimal
+    @request_stage = 'player load'
     @game.player.load
   end
 
   def scheduled_pause
-    @logger.info('Draining tool traffic for scheduled silence')
+    log(:info, 'Scheduled disconnection: three-hour cycle ended; blocking new requests and draining in-flight operations')
     @game.api.client.with_session_pause { |recover| silence_and_reconnect(recover) }
   end
 
   def silence_and_reconnect(recover)
     @game.api.sid = nil
     duration = rand(240..300)
-    @logger.info("Tool traffic silent for #{duration} seconds; stopping this job cancels silence")
+    log(:info, "Scheduled disconnection: all tool traffic blocked for #{duration} seconds; stopping this job cancels silence")
     deadline = monotonic + duration
     sleep(deadline - monotonic) while monotonic < deadline
     reconnect(recover)
@@ -69,21 +119,31 @@ class Antiafk < Sandbox::Script
       return false if deadline && monotonic >= deadline
 
       complete = false
+      failure = nil
       begin
         @game.api.sid = nil
-        @logger.info('Reconnecting exclusively')
+        log(:info, 'Reconnection attempt: authenticating and loading player; all other tool traffic blocked')
         recover.call { maintain_session }
         return false if deadline && monotonic >= deadline
 
         complete = true
-        @logger.info('Authenticated player loaded; tool traffic resumed')
+        log(:info, 'Reconnection succeeded: authentication and player load complete; tool traffic resumed')
         return true
-      rescue Hackers::RequestError
-        @logger.error("Reconnection failed; retrying in #{delay} seconds")
+      rescue Hackers::RequestError => error
+        failure = error
       ensure
         @game.api.sid = nil unless complete
       end
       wait = deadline ? [delay, deadline - monotonic].min : delay
+      if failure
+        seconds = format('%g', [wait, 0].max)
+        next_action = if deadline && monotonic + wait >= deadline
+                        "scheduled disconnection in #{seconds} seconds"
+                      else
+                        "retrying in #{seconds} seconds"
+                      end
+        log(:error, "Reconnection failed during #{@request_stage}: #{failure_reason(failure)}; #{next_action}; all other tool traffic blocked")
+      end
       sleep(wait) if wait.positive?
       delay = [delay * 2, RETRY_MAX].min
     end
