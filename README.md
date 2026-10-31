@@ -1,34 +1,34 @@
-# Trickster Arts Hackers reverse engineering
+# Ingeniería inversa de Hackers de Trickster Arts
 ![GitHub](https://img.shields.io/github/license/Mario-jesus/ta-hackers-client)
-[![Tests](https://github.com/Mario-jesus/ta-hackers-client/actions/workflows/tests.yml/badge.svg)](https://github.com/Mario-jesus/ta-hackers-client/actions/workflows/tests.yml)
+[![Pruebas](https://github.com/Mario-jesus/ta-hackers-client/actions/workflows/tests.yml/badge.svg)](https://github.com/Mario-jesus/ta-hackers-client/actions/workflows/tests.yml)
 
-## Overview
-This tool provides a sandbox for researching of the network API of the Hackers mobile game, originally developed by Trickster Arts
+## Descripción general
+Esta herramienta proporciona un entorno de pruebas para investigar la API de red del juego móvil Hackers, desarrollado originalmente por Trickster Arts.
 
-## Disclaimer
-This project is for research purposes only. All source code is provided as is. I don't condone of exploiting vulnerabilities or cheating in this game, you act at your own risk.
+## Aviso de responsabilidad
+Este proyecto tiene fines exclusivamente de investigación. Todo el código fuente se proporciona tal cual, sin garantías. No respaldo la explotación de vulnerabilidades ni el uso de trampas en este juego; actúas bajo tu propia responsabilidad.
 
-## Sandbox
-It uses my [sandbox-ruby](https://github.com/animotto/sandbox-ruby) gem
+## Entorno de pruebas
+Utiliza mi gema [sandbox-ruby](https://github.com/animotto/sandbox-ruby).
 
-The sandbox consists of the following contexts:
-- `chat` Internal chat
-- `market` Purchases of various ingame items
-- `mission` Managing your missions
-- `net` Maintenance your network
-- `prog` Managing your programs
-- `query` Creating and analyzing queries to the API server
-- `script` Running your own scripts to interact with the sandbox
-- `top` Top players
-- `world` World map
+El entorno de pruebas consta de los siguientes contextos:
+- `chat` Chat interno
+- `market` Compra de diversos objetos del juego
+- `mission` Gestión de tus misiones
+- `net` Mantenimiento de tu red
+- `prog` Gestión de tus programas
+- `query` Creación y análisis de consultas al servidor de la API
+- `script` Ejecución de tus propios scripts para interactuar con el entorno de pruebas
+- `top` Clasificación de jugadores
+- `world` Mapa mundial
 
-## How to run it
+## Cómo ejecutarlo
 
-Clone the repository to your local machine and prepare the environment:
+Clona el repositorio en tu equipo y prepara el entorno:
 ```console
 git clone https://github.com/Mario-jesus/ta-hackers-client.git
 cd ta-hackers-client
-# Use Ruby 3.3.12 and Bundler 2.5.22.
+# Usa Ruby 3.3.12 y Bundler 2.5.22.
 export BUNDLE_PATH="$PWD/.bundle/native-readline"
 export BUNDLE_APP_CONFIG="$PWD/.bundle"
 export BUNDLE_FROZEN=true
@@ -36,54 +36,54 @@ bundle _2.5.22_ install
 export RUBYLIB=$PWD/lib
 ```
 
-Before interactive use, [build the native callback with GNU Readline 8.3](docs/cli-interactive-chat.md#reproducible-native-build-and-tests).
-The ignored native artifact is not delivered by Git: rebuild it after pulling
-native source changes or changing Ruby/toolchains. Batch/non-TTY use does not
-load this editor.
+Antes de usar el modo interactivo, [compila el callback nativo con GNU Readline 8.3](docs/cli-interactive-chat.md#reproducible-native-build-and-tests).
+El artefacto nativo, excluido del control de versiones, no se distribuye mediante Git: vuelve a compilarlo después de actualizar
+el código fuente nativo o cambiar Ruby o las herramientas de compilación. La ejecución por lotes o sin TTY no
+carga este editor.
 
-Next, [configure an account](#account-configuration) before connecting.
+A continuación, [configura una cuenta](#configuración-de-la-cuenta) antes de conectarte.
 
-## Account configuration
+## Configuración de la cuenta
 
-Configuration files contain JSON, even though their extension is `.conf`.
-`configs/default.conf` is the public template: its `id: 0` and empty `password`
-are placeholders, not usable credentials. The default platform is `apple`.
-Keep the server settings from the template unless you know they must change.
+Los archivos de configuración contienen JSON, aunque su extensión sea `.conf`.
+`configs/default.conf` es la plantilla pública: su `id: 0` y su `password` vacío
+son valores de ejemplo, no credenciales utilizables. La plataforma predeterminada es `apple`.
+Conserva la configuración del servidor de la plantilla salvo que sepas que es necesario cambiarla.
 
-### Create a new account
+### Crear una cuenta nueva
 
-To create a new game account and automatically save its ID and password in
-`configs/my.conf`, run this from the repository root:
+Para crear una cuenta nueva del juego y guardar automáticamente su ID y contraseña en
+`configs/my.conf`, ejecuta lo siguiente desde la raíz del repositorio:
 
 ```bash
 bundle exec ruby bin/sandbox -n my
 chmod 600 configs/my.conf
 ```
 
-This contacts the server and creates a real account; do not use it merely to
-open an existing account. It copies the default settings and refuses to overwrite
-an existing configuration with the same name.
+Esto contacta con el servidor y crea una cuenta real; no lo uses simplemente para
+abrir una cuenta existente. Copia la configuración predeterminada y rechaza sobrescribir
+una configuración existente con el mismo nombre.
 
-Alternatively, the sandbox command `new` creates an account and **prints** its
-ID, password, and session ID:
+Como alternativa, el comando `new` del entorno de pruebas crea una cuenta y **muestra** su
+ID, contraseña e ID de sesión:
 
 ```text
 new
 ```
 
-Unlike `-n my`, `new` does not save a configuration or switch the running session
-to the new account. Save the returned **ID and Password** in a private config as
-described below, then restart with that config. A session ID is temporary and
-does not replace those credentials.
+A diferencia de `-n my`, `new` no guarda una configuración ni cambia la sesión en curso
+a la cuenta nueva. Guarda los valores devueltos de **ID y Password** en una configuración privada como
+se describe a continuación y reinicia con esa configuración. El ID de sesión es temporal y
+no sustituye esas credenciales.
 
-### Link an existing account with `cpuse`
+### Vincular una cuenta existente con `cpuse`
 
-Use a platform-change code belonging to an account you own. An already
-authenticated client can generate one with `cpgen`. Treat the code as a secret.
-`cpuse` requires a connected sandbox session; it cannot run against the empty
-default credentials.
+Usa un código de cambio de plataforma perteneciente a una cuenta de tu propiedad. Un cliente ya
+autenticado puede generar uno con `cpgen`. Trata el código como un secreto.
+`cpuse` requiere una sesión conectada del entorno de pruebas; no puede ejecutarse con las credenciales
+predeterminadas vacías.
 
-If you have no working sandbox account yet, create a temporary one first:
+Si todavía no tienes una cuenta que funcione en el entorno de pruebas, crea primero una temporal:
 
 ```bash
 bundle exec ruby bin/sandbox -n bootstrap
@@ -91,31 +91,31 @@ chmod 600 configs/bootstrap.conf
 bundle exec ruby bin/sandbox -a -m -c bootstrap
 ```
 
-At the sandbox prompt, connect and redeem your code for the target platform:
+En la consola del entorno de pruebas, conéctate y canjea tu código para la plataforma de destino:
 
 ```text
 connect
 cpuse YOUR_PLATFORM_CHANGE_CODE apple
 ```
 
-Replace `YOUR_PLATFORM_CHANGE_CODE` with your actual code. `cpuse` calls the
-platform-change API and prints the linked account's **ID and Password**; it does
-not write them to disk or replace the current session. Save those returned
-credentials in a separate configuration, rather than the bootstrap account's
-credentials. The platform argument must match the target configuration.
+Sustituye `YOUR_PLATFORM_CHANGE_CODE` por tu código real. `cpuse` llama a la
+API de cambio de plataforma y muestra los valores **ID y Password** de la cuenta vinculada; no
+los escribe en disco ni reemplaza la sesión actual. Guarda esas credenciales devueltas
+en una configuración independiente, en lugar de las credenciales de la cuenta temporal.
+El argumento de plataforma debe coincidir con la configuración de destino.
 
-### Save credentials and select the configuration
+### Guardar las credenciales y seleccionar la configuración
 
-For example, create `configs/apple.conf` from the public template **only if that
-file does not already exist**:
+Por ejemplo, crea `configs/apple.conf` a partir de la plantilla pública **solo si ese
+archivo aún no existe**:
 
 ```bash
 cp -n configs/default.conf configs/apple.conf
 chmod 600 configs/apple.conf
 ```
 
-Edit `configs/apple.conf` with your preferred text editor. Replace `id` and
-`password` with the values returned by `new` or `cpuse`, keeping valid JSON:
+Edita `configs/apple.conf` con tu editor de texto preferido. Sustituye `id` y
+`password` por los valores devueltos por `new` o `cpuse`, manteniendo un JSON válido:
 
 ```json
 {
@@ -125,36 +125,36 @@ Edit `configs/apple.conf` with your preferred text editor. Replace `id` and
 }
 ```
 
-This is an excerpt, not a replacement for the whole template: preserve its other
-settings. The ID above is only an example; use your returned numeric ID. Leave
-`autocmd` empty if you want to connect manually.
+Este es un fragmento, no un reemplazo de toda la plantilla: conserva el resto de sus
+opciones. El ID anterior es solo un ejemplo; usa el ID numérico que hayas recibido. Deja
+`autocmd` vacío si quieres conectarte manualmente.
 
-Exit the old sandbox session and start a new one with the saved configuration:
+Sal de la sesión anterior del entorno de pruebas e inicia una nueva con la configuración guardada:
 
 ```bash
 bundle exec ruby bin/sandbox -a -m -c apple
 ```
 
-Then enter `connect`. `-c apple` resolves to `configs/apple.conf`; `-a` disables
-automatic configuration commands and `-m` uses minimal authentication.
+Después, introduce `connect`. `-c apple` corresponde a `configs/apple.conf`; `-a` desactiva
+los comandos automáticos de la configuración y `-m` utiliza la autenticación mínima.
 
-**Keep credentials private.** Never put real credentials in the tracked
-`configs/default.conf`, a README, an issue, or a screenshot. Private account
-configs are ignored by Git, but ignore rules do not protect files already
-tracked; never force-add credential files.
+**Mantén las credenciales en privado.** Nunca incluyas credenciales reales en el archivo versionado
+`configs/default.conf`, en un README, en una incidencia ni en una captura de pantalla. Las configuraciones
+privadas de las cuentas están excluidas de Git, pero las reglas de exclusión no protegen archivos que ya
+están versionados; nunca fuerces la inclusión de archivos de credenciales.
 
-## Install and run on Termux (experimental)
+## Instalación y ejecución en Termux (experimental)
 
-Run these commands **inside Termux on Android**, not on your desktop. Keep the
-checkout under Termux's home directory (`$HOME`), rather than shared storage such
-as `/sdcard`. The desktop `mise` launcher and `env-ruby33.sh` are not required.
+Ejecuta estos comandos **dentro de Termux en Android**, no en tu equipo de escritorio. Mantén la
+copia del repositorio dentro del directorio personal de Termux (`$HOME`), en lugar de usar almacenamiento compartido
+como `/sdcard`. No se necesitan el lanzador `mise` de escritorio ni `env-ruby33.sh`.
 
-**Compatibility:** the reference toolchain is Ruby 3.3.12 with GNU Readline 8.3.
-Termux may provide a different Ruby version, and these instructions have not been
-validated on Android. The interactive editor still requires GNU Readline 8.3;
-do not remove its version check to work around a load error.
+**Compatibilidad:** el entorno de referencia utiliza Ruby 3.3.12 con GNU Readline 8.3.
+Termux puede proporcionar una versión diferente de Ruby y estas instrucciones no se han
+validado en Android. El editor interactivo sigue requiriendo GNU Readline 8.3;
+no elimines su comprobación de versión para evitar un error de carga.
 
-### 1. Install system tools and Ruby dependencies
+### 1. Instalar las herramientas del sistema y las dependencias de Ruby
 
 ```bash
 pkg update
@@ -163,15 +163,15 @@ pkg install git ruby clang make pkg-config readline
 gem install bundler --no-document
 ```
 
-If you already cloned the repository into `~/ta-hackers-client`, enter it directly.
-Otherwise, clone it first:
+Si ya has clonado el repositorio en `~/ta-hackers-client`, entra directamente en ese directorio.
+De lo contrario, clónalo primero:
 
 ```bash
 git clone https://github.com/Mario-jesus/ta-hackers-client.git "$HOME/ta-hackers-client"
 cd ~/ta-hackers-client
 ```
 
-From the repository root, install the gems:
+Desde la raíz del repositorio, instala las gemas:
 
 ```bash
 unset BUNDLE_FROZEN BUNDLE_DEPLOYMENT
@@ -180,15 +180,15 @@ bundle add base64 readline net-http
 bundle install
 ```
 
-This updates your local `Gemfile` and `Gemfile.lock`: newer Ruby releases may no
-longer provide these libraries implicitly. It is a Termux setup adjustment, not
-the frozen reference-toolchain installation described above.
+Esto actualiza tus archivos locales `Gemfile` y `Gemfile.lock`: las versiones más recientes de Ruby pueden
+haber dejado de proporcionar estas bibliotecas de forma implícita. Es un ajuste de configuración para Termux, no
+la instalación con versiones fijadas del entorno de referencia descrita anteriormente.
 
-### 2. Build and verify the native terminal editor
+### 2. Compilar y verificar el editor nativo de terminal
 
-The native artifact is not included in Git and must be built on the phone. The
-project's build helper requires Ruby 3.3.12; for the experimental Termux runtime,
-configure and compile the extension directly in its ignored build directory:
+El artefacto nativo no está incluido en Git y debe compilarse en el teléfono. El
+script auxiliar de compilación del proyecto requiere Ruby 3.3.12; para el entorno experimental de Termux,
+configura y compila la extensión directamente en su directorio de compilación excluido de Git:
 
 ```bash
 mkdir -p .bundle/native-readline-callback
@@ -203,25 +203,25 @@ cp ext/cli_readline_callback/extconf.rb \
 )
 ```
 
-Verify the editor without connecting to the game:
+Verifica el editor sin conectarte al juego:
 
 ```bash
 bundle exec ruby -Ilib -rsandbox -rcli/interactive_shell \
   -e 'Sandbox::InteractiveShell.load_native; puts "Native editor OK"'
 ```
 
-Continue only if this prints `Native editor OK`. If compilation or loading fails,
-retain the error and check `ruby -v` and the installed Readline version before
-proceeding. Rebuild after changing Ruby or pulling native source changes. A
-successful load is not proof of full Android terminal compatibility.
+Continúa solo si se muestra `Native editor OK`. Si la compilación o la carga fallan,
+conserva el error y comprueba `ruby -v` y la versión instalada de Readline antes de
+continuar. Vuelve a compilar después de cambiar Ruby o actualizar el código fuente nativo. Una
+carga correcta no demuestra la compatibilidad completa con el terminal de Android.
 
-### 3. Start with an existing account
+### 3. Iniciar con una cuenta existente
 
-For a configuration named `apple`, securely copy your existing account file to
-`configs/apple.conf` if it is not already present. Cloning the repository does
-not guarantee that your private credentials are included. Do not publish them.
-If you do not have a configuration yet, follow [Account configuration](#account-configuration)
-to create an account with `new` or link one with `cpuse` and save its credentials.
+Para una configuración llamada `apple`, copia de forma segura el archivo de tu cuenta existente a
+`configs/apple.conf` si todavía no está presente. Clonar el repositorio no
+garantiza que tus credenciales privadas estén incluidas. No las publiques.
+Si aún no tienes una configuración, sigue las instrucciones de [Configuración de la cuenta](#configuración-de-la-cuenta)
+para crear una cuenta con `new` o vincular una con `cpuse` y guardar sus credenciales.
 
 ```bash
 ls configs/apple.conf
@@ -229,97 +229,97 @@ chmod 600 configs/apple.conf
 bundle exec ruby bin/sandbox -a -m -c apple
 ```
 
-At the sandbox prompt, connect explicitly:
+En la consola del entorno de pruebas, conéctate explícitamente:
 
 ```text
 connect
 ```
 
-`-a` disables automatic configuration commands, `-m` selects minimal
-authentication, and `-c apple` loads `configs/apple.conf`. This uses the existing
-account; it does not create a new one. On subsequent launches, run the same
-`bundle exec ruby bin/sandbox -a -m -c apple` command from the repository root.
+`-a` desactiva los comandos automáticos de la configuración, `-m` selecciona la autenticación
+mínima y `-c apple` carga `configs/apple.conf`. Esto utiliza la cuenta
+existente; no crea una nueva. En los siguientes inicios, ejecuta el mismo
+comando `bundle exec ruby bin/sandbox -a -m -c apple` desde la raíz del repositorio.
 
-## Anti-AFK session cycle
+## Ciclo de sesión anti-AFK
 
-Run `script run antiafk [online_minutes] [offline_minutes]` in an authenticated
-sandbox. Both positional arguments are optional:
+Ejecuta `script run antiafk [online_minutes] [offline_minutes]` en un entorno de pruebas
+autenticado. Ambos argumentos posicionales son opcionales:
 
 ```text
-script run antiafk          # Default: 90 minutes online, random 240–300 seconds offline
-script run antiafk 120      # 120 minutes online, random 240–300 seconds offline
-script run antiafk 120 5    # 120 minutes online, fixed 5 minutes offline
+script run antiafk          # Predeterminado: 90 minutos conectado, 240–300 segundos aleatorios desconectado
+script run antiafk 120      # 120 minutos conectado, 240–300 segundos aleatorios desconectado
+script run antiafk 120 5    # 120 minutos conectado, 5 minutos fijos desconectado
 ```
 
-Supply positive whole-number minutes only, with at most two arguments. Invalid
-values report `Timing arguments must be positive whole-number minutes`; excess
-arguments report `Expected at most two timing arguments`. Both errors include
-`Usage: script run antiafk [online_minutes] [offline_minutes]` and stop before
-acquiring the session gate or making authentication/player/network requests.
-Startup and scheduled-disconnection messages show the selected online timing;
-the silence message reports its actual duration in seconds.
+Introduce únicamente minutos expresados como números enteros positivos, con un máximo de dos argumentos. Los valores
+no válidos generan `Timing arguments must be positive whole-number minutes`; un exceso de
+argumentos genera `Expected at most two timing arguments`. Ambos errores incluyen
+`Usage: script run antiafk [online_minutes] [offline_minutes]` y detienen la ejecución antes de
+adquirir el control exclusivo de la sesión o realizar solicitudes de autenticación, jugador o red.
+Los mensajes de inicio y desconexión programada muestran el tiempo de conexión seleccionado;
+el mensaje de silencio informa de su duración real en segundos.
 
-Only one anti-AFK job
-may run at a time (including `./antiafk` aliases). Use `script jobs` to find
-its job ID and `script kill <id>` to stop it.
+Solo puede ejecutarse un trabajo anti-AFK
+a la vez (incluidos los alias `./antiafk`). Usa `script jobs` para encontrar
+su ID de trabajo y `script kill <id>` para detenerlo.
 
-| Phase | Local behavior |
-|-------|----------------|
-| Online | Minimal authentication followed by player loading about every 60 seconds; a monotonic clock measures each online cycle (90 minutes by default). |
-| Drain and silence | Reject new requests throughout this tool, wait for admitted requests to finish, clear the local session ID, then remain silent for a randomly chosen inclusive 240–300 seconds, or the fixed offline minutes supplied. |
-| Recovery | Only the anti-AFK owner can send recovery requests. Authentication **and** player loading must succeed before other traffic reopens. Request errors retry indefinitely after 10, 20, 40, 80, 160, then 180 seconds (capped); successful recovery resets the cycle and backoff. |
+| Fase | Comportamiento local |
+|------|----------------------|
+| Conexión | Autenticación mínima seguida de la carga del jugador aproximadamente cada 60 segundos; un reloj monotónico mide cada ciclo de conexión (90 minutos de forma predeterminada). |
+| Finalización de solicitudes y silencio | Rechaza las solicitudes nuevas en toda la herramienta, espera a que terminen las solicitudes admitidas, borra el ID de sesión local y permanece en silencio durante un periodo aleatorio de entre 240 y 300 segundos, ambos incluidos, o durante los minutos fijos de desconexión indicados. |
+| Recuperación | Solo el propietario del trabajo anti-AFK puede enviar solicitudes de recuperación. Tanto la autenticación **como** la carga del jugador deben completarse correctamente antes de volver a permitir el resto del tráfico. Los errores de solicitud se reintentan indefinidamente tras 10, 20, 40, 80, 160 y después 180 segundos (límite máximo); una recuperación correcta reinicia el ciclo y la espera entre reintentos. |
 
-Other scripts and interactive requests fail immediately with an actionable
-`Hackers::RequestError` during drain, silence, and recovery; they are not queued
-for replay with stale sessions or mutations. A maintenance failure also enters
-exclusive recovery without postponing the original configured silence deadline (90 minutes by default).
-Retry waits stop at that deadline and transition directly into scheduled silence
-without reopening traffic. An in-flight recovery that finishes after the deadline
-also enters silence immediately; post-silence retries restart at 10 seconds.
-Authentication already in progress is drained through response parsing and local
-state updates before silence starts, so it cannot overwrite a recovered session.
+Los demás scripts y las solicitudes interactivas fallan de inmediato con un
+`Hackers::RequestError` que indica cómo proceder durante la finalización de solicitudes, el silencio y la recuperación; no se encolan
+para volver a ejecutarse con sesiones obsoletas u operaciones de modificación. Un fallo de mantenimiento también inicia
+una recuperación exclusiva sin posponer el plazo de silencio configurado originalmente (90 minutos de forma predeterminada).
+Las esperas entre reintentos terminan al alcanzar ese plazo y pasan directamente al silencio programado
+sin reabrir el tráfico. Una recuperación en curso que termina después del plazo
+también pasa al silencio de inmediato; los reintentos posteriores al silencio vuelven a empezar en 10 segundos.
+La autenticación que ya está en curso se deja terminar, incluido el análisis de la respuesta y las actualizaciones del estado
+local, antes de iniciar el silencio, para que no pueda sobrescribir una sesión recuperada.
 
-Every anti-AFK log line starts with the machine's local date, time and UTC
-offset, for example `[2026-11-02 14:05:09 -03:00]`. Logs identify startup,
-authenticated maintenance, scheduled disconnection, reconnection attempts,
-successful recovery and the next retry delay (or the upcoming scheduled pause).
-The failed stage is shown as `authentication` or `player load`.
-`Anti-AFK starting` appears immediately after the job takes ownership;
-`Anti-AFK activated successfully` confirms activation only after authentication
-and player loading succeed. Both messages include their own timestamp. Startup
-failures report their cause and retries without falsely confirming activation.
+Cada línea del registro anti-AFK comienza con la fecha y hora locales del equipo y su desplazamiento
+respecto a UTC, por ejemplo, `[2026-11-02 14:05:09 -03:00]`. Los registros identifican el inicio,
+el mantenimiento autenticado, la desconexión programada, los intentos de reconexión,
+la recuperación correcta y la siguiente espera entre reintentos (o la próxima pausa programada).
+La etapa que ha fallado se muestra como `authentication` o `player load`.
+`Anti-AFK starting` aparece inmediatamente después de que el trabajo asume el control;
+`Anti-AFK activated successfully` confirma la activación solo después de que la autenticación
+y la carga del jugador se completen correctamente. Ambos mensajes incluyen su propia marca de tiempo. Los fallos
+al iniciar informan de su causa y de los reintentos sin confirmar falsamente la activación.
 
-Diagnostics distinguish observed evidence rather than guessing why a session
-failed:
+Los diagnósticos distinguen las evidencias observadas, sin adivinar por qué ha fallado una
+sesión:
 
-| Log category | Meaning |
-|--------------|---------|
-| `Network/transport failure` | DNS, timeout, refused/reset connection or another recognized transport error. |
-| `TLS connection failed` | TLS failed; this does not confirm server rejection. |
-| `Server rejected authentication (HTTP 401)` / `Server refused the request (HTTP 403)` | The server returned an explicit HTTP rejection. |
-| `Server rate limited the request (HTTP 429)` | The server explicitly rate limited the request. |
-| `Server returned an error (HTTP 5xx)` | A server error response, not proof that another player entered the network. |
-| `Server reported a protocol rejection` | The game returned a protocol exception; its underlying cause is not inferred. |
-| `cause unconfirmed` | Available error metadata is insufficient to classify the cause. |
-| `Scheduled disconnection` | The intentional configured cycle pause (90 minutes by default), not a network failure. |
+| Categoría del registro | Significado |
+|------------------------|-------------|
+| `Network/transport failure` | DNS, tiempo de espera agotado, conexión rechazada o restablecida, u otro error de transporte reconocido. |
+| `TLS connection failed` | Falló TLS; esto no confirma un rechazo del servidor. |
+| `Server rejected authentication (HTTP 401)` / `Server refused the request (HTTP 403)` | El servidor devolvió un rechazo HTTP explícito. |
+| `Server rate limited the request (HTTP 429)` | El servidor limitó explícitamente la frecuencia de las solicitudes. |
+| `Server returned an error (HTTP 5xx)` | Una respuesta de error del servidor, no una prueba de que otro jugador haya entrado en la red. |
+| `Server reported a protocol rejection` | El juego devolvió una excepción de protocolo; no se infiere su causa subyacente. |
+| `cause unconfirmed` | Los metadatos disponibles del error no bastan para clasificar la causa. |
+| `Scheduled disconnection` | La pausa intencionada del ciclo configurado (90 minutos de forma predeterminada), no un fallo de red. |
 
-Exception descriptions, response bodies, session IDs and credentials are not
-logged. Timestamps use wall-clock time for readability; cycle timing still uses
-the monotonic clock.
+No se registran las descripciones de las excepciones, los cuerpos de las respuestas, los ID de sesión ni las credenciales.
+Las marcas de tiempo utilizan la hora del sistema para facilitar la lectura; la duración de los ciclos sigue midiéndose
+con el reloj monotónico.
 
-**Stopping the job cancels its control:** cleanup releases the traffic gate,
-even during drain, silence, or recovery. This deliberately ends the scheduled
-silence early; a cleared session remains cleared unless recovery completed.
-Authenticate again before issuing session-dependent commands if necessary.
+**Detener el trabajo cancela su control:** la limpieza libera el bloqueo del tráfico,
+incluso durante la finalización de solicitudes, el silencio o la recuperación. Esto termina deliberadamente el silencio
+programado antes de tiempo; una sesión borrada permanece borrada salvo que la recuperación se haya completado.
+Si es necesario, vuelve a autenticarte antes de ejecutar comandos que dependan de la sesión.
 
-This is local traffic scheduling, not a logout endpoint or a guarantee against
-server-side inactivity, attacks, or session takeover. The server may retain a
-session after local silence begins. Other processes, devices, and clients are
-outside this tool's control. Offline tests cannot establish server-side protection.
+Esto es una programación local del tráfico, no un endpoint de cierre de sesión ni una garantía frente a
+la inactividad del lado del servidor, los ataques o la toma de control de la sesión. El servidor puede conservar una
+sesión después de que comience el silencio local. Otros procesos, dispositivos y clientes quedan
+fuera del control de esta herramienta. Las pruebas sin conexión no pueden demostrar la protección del lado del servidor.
 
-## Contributing
+## Contribuciones
 
-Any suggestions are welcome, just open an issue on Github. If you want to contribute to the source code, you can fork this repository and submit a pull request.
+Cualquier sugerencia es bienvenida; basta con abrir una incidencia en GitHub. Si quieres contribuir al código fuente, puedes crear una bifurcación de este repositorio y enviar una solicitud de cambios (pull request).
 
-## License
-See the [LICENSE](LICENSE) file
+## Licencia
+Consulta el archivo [LICENSE](LICENSE).
