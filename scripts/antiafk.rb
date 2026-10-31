@@ -2,7 +2,7 @@
 
 class Antiafk < Sandbox::Script
   MAINTENANCE_INTERVAL = 60
-  ONLINE_INTERVAL = 3 * 60 * 60
+  ONLINE_INTERVAL = 90 * 60
   RETRY_MAX = 180
   TRANSPORT_FAILURES = {
     'SocketError' => 'DNS lookup failed',
@@ -21,6 +21,8 @@ class Antiafk < Sandbox::Script
   }.freeze
 
   def main
+    return unless configure_timing
+
     @game.api.client.with_session_cycle do
       log(:info, 'Anti-AFK starting; checking authentication and player load')
       begin
@@ -29,11 +31,11 @@ class Antiafk < Sandbox::Script
         log(:error, "Startup failed during #{@request_stage}: #{failure_reason(error)}; entering exclusive recovery")
         @game.api.client.with_session_pause { |recover| reconnect(recover) }
       end
-      log(:info, "Anti-AFK activated successfully; Authenticated session active; next maintenance in #{MAINTENANCE_INTERVAL} seconds; scheduled disconnection after three hours")
+      log(:info, "Anti-AFK activated successfully; Authenticated session active; next maintenance in #{MAINTENANCE_INTERVAL} seconds; scheduled disconnection after #{@online_interval / 60} minutes")
       online_since = monotonic
       loop do
-        sleep([MAINTENANCE_INTERVAL, ONLINE_INTERVAL - (monotonic - online_since)].min.clamp(0, MAINTENANCE_INTERVAL))
-        if monotonic - online_since >= ONLINE_INTERVAL
+        sleep([MAINTENANCE_INTERVAL, @online_interval - (monotonic - online_since)].min.clamp(0, MAINTENANCE_INTERVAL))
+        if monotonic - online_since >= @online_interval
           scheduled_pause
           online_since = monotonic
         else
@@ -44,7 +46,7 @@ class Antiafk < Sandbox::Script
             log(:error, "Maintenance failed during #{@request_stage}: #{failure_reason(error)}; entering exclusive recovery")
             silenced = false
             @game.api.client.with_session_pause do |recover|
-              unless reconnect(recover, deadline: online_since + ONLINE_INTERVAL)
+              unless reconnect(recover, deadline: online_since + @online_interval)
                 # Keep the same closed gate when recovery reaches the deadline.
                 silence_and_reconnect(recover)
                 silenced = true
@@ -58,6 +60,22 @@ class Antiafk < Sandbox::Script
   end
 
   private
+
+  def configure_timing
+    usage = 'Usage: script run antiafk [online_minutes] [offline_minutes]'
+    if @args.length > 2
+      log(:error, "Expected at most two timing arguments. #{usage}")
+      return false
+    end
+    unless @args.all? { |arg| /\A[0-9]+\z/.match?(arg) && arg.to_i.positive? }
+      log(:error, "Timing arguments must be positive whole-number minutes. #{usage}")
+      return false
+    end
+
+    @online_interval = @args[0] ? @args[0].to_i * 60 : ONLINE_INTERVAL
+    @offline_interval = @args[1] ? @args[1].to_i * 60 : nil
+    true
+  end
 
   def monotonic
     Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -100,13 +118,13 @@ class Antiafk < Sandbox::Script
   end
 
   def scheduled_pause
-    log(:info, 'Scheduled disconnection: three-hour cycle ended; blocking new requests and draining in-flight operations')
+    log(:info, "Scheduled disconnection: #{@online_interval / 60}-minute cycle ended; blocking new requests and draining in-flight operations")
     @game.api.client.with_session_pause { |recover| silence_and_reconnect(recover) }
   end
 
   def silence_and_reconnect(recover)
     @game.api.sid = nil
-    duration = rand(240..300)
+    duration = @offline_interval || rand(240..300)
     log(:info, "Scheduled disconnection: all tool traffic blocked for #{duration} seconds; stopping this job cancels silence")
     deadline = monotonic + duration
     sleep(deadline - monotonic) while monotonic < deadline

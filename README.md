@@ -242,20 +242,37 @@ account; it does not create a new one. On subsequent launches, run the same
 
 ## Anti-AFK session cycle
 
-Run `script run antiafk` in an authenticated sandbox. Only one anti-AFK job
+Run `script run antiafk [online_minutes] [offline_minutes]` in an authenticated
+sandbox. Both positional arguments are optional:
+
+```text
+script run antiafk          # Default: 90 minutes online, random 240–300 seconds offline
+script run antiafk 120      # 120 minutes online, random 240–300 seconds offline
+script run antiafk 120 5    # 120 minutes online, fixed 5 minutes offline
+```
+
+Supply positive whole-number minutes only, with at most two arguments. Invalid
+values report `Timing arguments must be positive whole-number minutes`; excess
+arguments report `Expected at most two timing arguments`. Both errors include
+`Usage: script run antiafk [online_minutes] [offline_minutes]` and stop before
+acquiring the session gate or making authentication/player/network requests.
+Startup and scheduled-disconnection messages show the selected online timing;
+the silence message reports its actual duration in seconds.
+
+Only one anti-AFK job
 may run at a time (including `./antiafk` aliases). Use `script jobs` to find
 its job ID and `script kill <id>` to stop it.
 
 | Phase | Local behavior |
 |-------|----------------|
-| Online | Minimal authentication followed by player loading about every 60 seconds; a monotonic clock measures each three-hour online cycle. |
-| Drain and silence | Reject new requests throughout this tool, wait for admitted requests to finish, clear the local session ID, then remain silent for a randomly chosen inclusive 240–300 seconds. |
+| Online | Minimal authentication followed by player loading about every 60 seconds; a monotonic clock measures each online cycle (90 minutes by default). |
+| Drain and silence | Reject new requests throughout this tool, wait for admitted requests to finish, clear the local session ID, then remain silent for a randomly chosen inclusive 240–300 seconds, or the fixed offline minutes supplied. |
 | Recovery | Only the anti-AFK owner can send recovery requests. Authentication **and** player loading must succeed before other traffic reopens. Request errors retry indefinitely after 10, 20, 40, 80, 160, then 180 seconds (capped); successful recovery resets the cycle and backoff. |
 
 Other scripts and interactive requests fail immediately with an actionable
 `Hackers::RequestError` during drain, silence, and recovery; they are not queued
 for replay with stale sessions or mutations. A maintenance failure also enters
-exclusive recovery without postponing the original three-hour silence deadline.
+exclusive recovery without postponing the original configured silence deadline (90 minutes by default).
 Retry waits stop at that deadline and transition directly into scheduled silence
 without reopening traffic. An in-flight recovery that finishes after the deadline
 also enters silence immediately; post-silence retries restart at 10 seconds.
@@ -284,7 +301,7 @@ failed:
 | `Server returned an error (HTTP 5xx)` | A server error response, not proof that another player entered the network. |
 | `Server reported a protocol rejection` | The game returned a protocol exception; its underlying cause is not inferred. |
 | `cause unconfirmed` | Available error metadata is insufficient to classify the cause. |
-| `Scheduled disconnection` | The intentional three-hour cycle pause, not a network failure. |
+| `Scheduled disconnection` | The intentional configured cycle pause (90 minutes by default), not a network failure. |
 
 Exception descriptions, response bodies, session IDs and credentials are not
 logged. Timestamps use wall-clock time for readability; cycle timing still uses

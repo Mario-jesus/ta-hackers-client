@@ -106,7 +106,7 @@ RSpec.describe 'Anti-AFK diagnostic logs' do
     catch(:done) { script.main }
     activation = entries.select { |_, message| message.include?('Anti-AFK activated successfully') }
     expect(activation.length).to eq(1)
-    expect(activation.first).to eq([:info, '[2026-11-02 14:05:09 -03:00] Anti-AFK activated successfully; Authenticated session active; next maintenance in 60 seconds; scheduled disconnection after three hours'])
+    expect(activation.first).to eq([:info, '[2026-11-02 14:05:09 -03:00] Anti-AFK activated successfully; Authenticated session active; next maintenance in 60 seconds; scheduled disconnection after 90 minutes'])
   end
 
   it 'does not report successful activation while startup requests are failing' do
@@ -124,11 +124,11 @@ RSpec.describe 'Anti-AFK diagnostic logs' do
     allow(script).to receive(:rand).with(240..300).and_return(240)
     allow(script).to receive(:sleep) do |seconds|
       throw :done if seconds == 240
-      now += 10_800
+      now += 5_400
     end
     catch(:done) { script.main }
     text = entries.map(&:last).join("\n")
-    expect(text).to include('Scheduled disconnection', 'three-hour', '240 seconds', 'all tool traffic blocked')
+    expect(text).to include('Scheduled disconnection', '90-minute', '240 seconds', 'all tool traffic blocked')
     expect(entries.none? { |level, _| level == :error }).to be(true)
   end
 end

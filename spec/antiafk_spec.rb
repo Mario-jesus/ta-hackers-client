@@ -108,7 +108,7 @@ RSpec.describe 'Anti-AFK session cycle' do
     allow(script).to receive(:rand).with(240..300) { pauses += 1; 240 }
     allow(script).to receive(:sleep) do |seconds|
       delays << seconds
-      now += seconds == 60 ? 10_800 : seconds
+      now += seconds == 60 ? 5_400 : seconds
     end
     allow(player).to receive(:load) do
       loads += 1
@@ -146,7 +146,7 @@ RSpec.describe 'Anti-AFK session cycle' do
     owner&.kill&.join
   end
 
-  it 'does not postpone the three-hour silence deadline after transient maintenance recovery' do
+  it 'does not postpone the 90-minute silence deadline after transient maintenance recovery' do
     c = client
     api = double('api', client: c)
     allow(api).to receive(:sid=)
@@ -169,7 +169,7 @@ RSpec.describe 'Anti-AFK session cycle' do
     end
     catch(:done) { script.main }
     expect(failed_at).to eq([600, 1200])
-    expect(silence_at).to eq(10_800)
+    expect(silence_at).to eq(5_400)
   end
 
   [false, true].each do |late_success|
@@ -191,23 +191,23 @@ RSpec.describe 'Anti-AFK session cycle' do
           now += seconds
           expect(attempts.length).to eq(count)
         else
-          now += now.zero? ? 10_740 : seconds
+          now += now.zero? ? 5_340 : seconds
         end
       end
       allow(game).to receive(:auth_minimal) do
         attempts << now
         throw :done if attempts.length > 25 || (!silences.empty? && now >= silences.first + 1200)
         next if now.zero?
-        if late_success && now == 10_770
-          now = 10_810 # An admitted recovery operation finishes beyond its deadline.
+        if late_success && now == 5_370
+          now = 5_410 # An admitted recovery operation finishes beyond its deadline.
           next
         end
         raise Hackers::RequestError.new('Auth', 'rejected')
       end
       catch(:done) { script.main }
-      expect(silences).to eq([late_success ? 10_810 : 10_800])
-      expect(attempts.first(5)).to eq([0, 10_740, 10_740, 10_750, 10_770])
-      expect(waits.find { |time, _, _| time == 10_770 }[1]).to eq(30) unless late_success
+      expect(silences).to eq([late_success ? 5_410 : 5_400])
+      expect(attempts.first(5)).to eq([0, 5_340, 5_340, 5_350, 5_370])
+      expect(waits.find { |time, _, _| time == 5_370 }[1]).to eq(30) unless late_success
       expect(waits.drop(1).all? { |_, _, paused| paused }).to be(true)
       silence_start = silences.first
       expect(attempts.none? { |time| time >= silence_start && time < silence_start + 240 }).to be(true)
@@ -217,7 +217,7 @@ RSpec.describe 'Anti-AFK session cycle' do
     end
   end
 
-  it 'maintains authenticated presence, waits three hours, silences and retries beyond three minutes' do
+  it 'maintains authenticated presence, waits 90 minutes, silences and retries beyond three minutes' do
     c = client
     api = double('api', client: c)
     allow(api).to receive(:sid=)
@@ -238,7 +238,7 @@ RSpec.describe 'Anti-AFK session cycle' do
     allow(game).to receive(:auth_minimal) do
       attempts += 1
       if c.session_paused?
-        raise Hackers::RequestError.new('Auth', 'busy') if attempts < 188
+        raise Hackers::RequestError.new('Auth', 'busy') if attempts < 98
       end
     end
     allow(player).to receive(:load) do
@@ -249,9 +249,9 @@ RSpec.describe 'Anti-AFK session cycle' do
       end
     end
     catch(:done) { script.main }
-    expect(attempts).to be >= 188
-    expect(loads).to be >= 180
-    expect(sleeps.first(180)).to eq([60] * 180)
+    expect(attempts).to be >= 98
+    expect(loads).to be >= 90
+    expect(sleeps.first(90)).to eq([60] * 90)
     expect(api).to have_received(:sid=).with(nil).at_least(:once)
     expect(c.session_paused?).to be(false)
     expect { c.with_session_cycle {} }.not_to raise_error
